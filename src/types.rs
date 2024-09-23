@@ -1,3 +1,3 @@
-pub trait NodeID = Clone + PartialEq + PartialOrd;
+pub trait NodeID: Clone + PartialEq + PartialOrd {}
 
-pub trait IRMessage {}
+pub trait IRMessage: Clone + PartialEq + PartialOrd {}
