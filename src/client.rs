@@ -82,13 +82,34 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
 mod test {
     use crate::client::InconsistentReplicationClient;
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
+    use crate::types::{IRMessage, Incrementable, NodeID};
+    use crate::{IRStorage, InconsistentReplicationServer};
     use std::sync::Arc;
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
         let network = MockIRNetwork::<_, _, MockIRStorage>::new();
         let storage = MockIRStorage {};
-        let client = InconsistentReplicationClient::new(network, storage, &[1, 2, 3]);
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 1);
+        mock_cluster(&network, 1).await;
         let a = client.invoke_inconsistent(&[4, 5, 6]).await;
+    }
+
+    async fn mock_cluster<ID: NodeID + Incrementable, MSG: IRMessage>(
+        network: &MockIRNetwork<ID, MSG, MockIRStorage>,
+        first_node: ID,
+    ) {
+        let mut node_id = first_node.clone();
+        for _ in 0..4 {
+            network.register_node(
+                node_id.clone(),
+                InconsistentReplicationServer::new(
+                    network.clone(),
+                    MockIRStorage {},
+                    node_id.clone(),
+                ),
+            );
+            node_id = node_id.increment();
+        }
     }
 }
