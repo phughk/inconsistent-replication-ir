@@ -100,17 +100,40 @@ mod test {
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
+        // given a cluster
         let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
         let storage = MockIRStorage::new();
-        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
         mock_cluster(&network, &[1, 2, 3, 4]).await;
-        // Prevent the first request from working
+
+        // and a client
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
+
+        // when the client makes a request
+        let a = client.invoke_inconsistent(&[4, 5, 6]).await;
+
+        // then the request is handled
+        assert!(a.is_ok());
+    }
+
+    #[tokio::test]
+    async fn client_fails_inconsistent_request_no_quorum() {
+        // given a cluster
+        let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
+        let storage = MockIRStorage::new();
+        mock_cluster(&network, &[1, 2, 3, 4]).await;
+
+        // and a client
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
+
+        // when we prevent the request from being sent
         network.drop_packets_add(1, 1);
         network.drop_packets_add(2, 1);
+
+        // and we make the client perform the requests
         let a = client.invoke_inconsistent(&[4, 5, 6]).await;
+
+        // then the request was handled
         assert!(a.is_err());
-        let b = client.invoke_inconsistent(&[4, 5, 6]).await;
-        assert!(b.is_ok());
     }
 
     async fn mock_cluster<ID: NodeID + Incrementable, MSG: IRMessage>(
