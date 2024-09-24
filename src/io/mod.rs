@@ -15,9 +15,39 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: usize,
+        sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>>;
+
+    /// Used by clients to make a consistent request to a specific node
+    fn request_consistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>>;
+
+    /// Send a finalize message to a node
+    /// This does not need to be immediate, for example it can be buffered and sent
+    /// together with another message
+    fn async_finalize(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+
+    /// Send a finalize message to a node
+    /// This *DOES* need to be immediate, though can be batched.
+    fn sync_finalize(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 }
 
 /// Provides access to a storage log for views and persistence
@@ -28,10 +58,10 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
     fn record_tentative(
         &self,
         client: ID,
-        operation: usize,
+        operation: u64,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 
     /// Promote a tentative record to finalized
-    fn promote_finalized(&self, client: ID, operation: usize) -> Pin<Box<dyn Future<Output = ()>>>;
+    fn promote_finalized(&self, client: ID, operation: u64) -> Pin<Box<dyn Future<Output = ()>>>;
 }

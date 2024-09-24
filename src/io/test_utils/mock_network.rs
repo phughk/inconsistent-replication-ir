@@ -48,7 +48,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         &self,
         destination: I,
         client_id: I,
-        sequence: usize,
+        sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
         let nodes = self.nodes.clone();
@@ -66,6 +66,36 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
                 .await;
             Ok(msg)
         })
+    }
+
+    fn request_consistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
+        todo!()
+    }
+
+    fn async_finalize(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+        todo!()
+    }
+
+    fn sync_finalize(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+        todo!()
     }
 }
 

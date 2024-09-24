@@ -62,7 +62,7 @@ impl<N: IRNetwork<I, M>, S: IRStorage<I, M>, I: NodeID, M: IRMessage>
     pub fn exec_inconsistent(
         &self,
         client_id: I,
-        operation_sequence: usize,
+        operation_sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = M>>> {
         self.storage

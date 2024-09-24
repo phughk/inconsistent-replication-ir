@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct MockIRStorage<ID: NodeID + 'static, MSG: IRMessage + 'static> {
-    records: Arc<RwLock<BTreeMap<(ID, usize), (State, MSG)>>>,
+    records: Arc<RwLock<BTreeMap<(ID, u64), (State, MSG)>>>,
 }
 
 enum State {
@@ -20,7 +20,7 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
     fn record_tentative(
         &self,
         client: ID,
-        operation: usize,
+        operation: u64,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>> {
         let records = self.records.clone();
@@ -40,7 +40,7 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
         })
     }
 
-    fn promote_finalized(&self, client: ID, operation: usize) -> Pin<Box<dyn Future<Output = ()>>> {
+    fn promote_finalized(&self, client: ID, operation: u64) -> Pin<Box<dyn Future<Output = ()>>> {
         let records = self.records.clone();
         Box::pin(async move {
             let mut map = records.write().await;
