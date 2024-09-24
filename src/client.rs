@@ -35,6 +35,10 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
     pub async fn invoke_inconsistent(&self, message: MSG) {
         let nodes = self.network.get_members().await;
 
+        // Minimum cluster size is 4 if f is 1
+        if nodes.len() < 4 {
+            panic!("Cluster size too small");
+        }
         // Derive f, assuming cluster size is 3f+1
         let f = (nodes.len() - 1) / 3;
 
@@ -84,10 +88,7 @@ mod test {
     async fn client_can_make_inconsistent_requests() {
         let network = MockIRNetwork::<_, _, MockIRStorage>::new();
         let storage = MockIRStorage {};
-        let client =
-            InconsistentReplicationClient::new(network, storage, Arc::new("1".to_string()));
-        let a = client
-            .invoke_inconsistent(Arc::new("Hello, world!".to_string()))
-            .await;
+        let client = InconsistentReplicationClient::new(network, storage, &[1, 2, 3]);
+        let a = client.invoke_inconsistent(&[4, 5, 6]).await;
     }
 }

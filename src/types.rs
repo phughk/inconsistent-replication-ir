@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 pub trait NodeID: Clone + PartialEq + Ord + PartialOrd {}
 
-impl NodeID for &'static str {}
-impl NodeID for Arc<String> {}
+impl<A> NodeID for A where A: Clone + PartialEq + Ord + PartialOrd {}
 
 pub trait IRMessage: Clone + PartialEq + PartialOrd {}
 
-impl IRMessage for Arc<String> {}
+impl<A> IRMessage for A where A: Clone + PartialEq + PartialOrd {}
