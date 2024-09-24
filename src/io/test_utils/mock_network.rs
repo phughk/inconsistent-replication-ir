@@ -1,6 +1,6 @@
 use crate::types::{IRMessage, NodeID};
 use crate::{IRNetwork, IRStorage, InconsistentReplicationServer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -42,6 +42,8 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
     fn request_inconsistent(
         &self,
         destination: I,
+        client_id: I,
+        sequence: usize,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
         let nodes = self.nodes.clone();
@@ -51,7 +53,8 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
                 .unwrap()
                 .get(&destination)
                 .unwrap()
-                .exec_inconsistent(message);
+                .exec_inconsistent(client_id, sequence, message)
+                .await;
             Ok(msg)
         })
     }

@@ -4,6 +4,7 @@ use crate::IRStorage;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct InconsistentReplicationClient<
     N: IRNetwork<I, M>,
@@ -14,6 +15,7 @@ pub struct InconsistentReplicationClient<
     network: N,
     storage: S,
     client_id: I,
+    sequence: AtomicUsize,
     _a: PhantomData<M>,
 }
 
@@ -25,6 +27,7 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
             network,
             storage,
             client_id,
+            sequence: AtomicUsize::new(0),
             _a: PhantomData,
         }
     }
@@ -45,7 +48,12 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         // Initiate requests
         let mut requests = FuturesUnordered::new();
         for node in nodes {
-            requests.push(self.network.request_inconsistent(node, message.clone()));
+            requests.push(self.network.request_inconsistent(
+                node,
+                self.client_id.clone(),
+                self.sequence.fetch_add(1, Ordering::SeqCst),
+                message.clone(),
+            ));
         }
         let mut responses = Vec::with_capacity(requests.len());
 

@@ -1,6 +1,8 @@
 use crate::io::{IRNetwork, IRStorage};
 use crate::types::{IRMessage, NodeID};
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 
 /// Implementation of a server node for receiving and handling operations according to the
 /// Inconsistent Replication algorithm.
@@ -56,8 +58,14 @@ impl<N: IRNetwork<I, M>, S: IRStorage<I, M>, I: NodeID, M: IRMessage>
         }
     }
 
-    pub fn exec_inconsistent(&self, message: M) -> M {
-        unimplemented!("Implement me!");
+    pub fn exec_inconsistent(
+        &self,
+        client_id: I,
+        operation_sequence: usize,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = M>>> {
+        self.storage
+            .record_tentative(client_id, operation_sequence, message)
     }
 
     pub fn exec_consistent(&self, message: M) -> M {
