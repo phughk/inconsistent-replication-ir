@@ -6,6 +6,10 @@ use futures::StreamExt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
+/// Minimum cluster size of f=1 is 3
+const MINIMUM_CLUSTER_SIZE: usize = 3;
+
 pub struct InconsistentReplicationClient<
     N: IRNetwork<I, M>,
     S: IRStorage<I, M>,
@@ -13,6 +17,7 @@ pub struct InconsistentReplicationClient<
     M: IRMessage,
 > {
     network: N,
+    #[allow(unused)]
     storage: S,
     client_id: I,
     sequence: AtomicUsize,
@@ -35,12 +40,11 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
     /// Make an inconsistent request to the cluster
     /// Inconsistent requests happen in any order
     /// Conflict resolution is done by the client after receiving responses
-    pub async fn invoke_inconsistent(&self, message: MSG) {
+    pub async fn invoke_inconsistent(&self, message: MSG) -> Result<(), &'static str> {
         let nodes = self.network.get_members().await;
 
-        // Minimum cluster size is 4 if f is 1
-        if nodes.len() < 4 {
-            panic!("Cluster size too small");
+        if nodes.len() < MINIMUM_CLUSTER_SIZE {
+            return Err("Cluster size is too small");
         }
         // Derive f, assuming cluster size is 3f+1
         let f = (nodes.len() - 1) / 3;
@@ -66,15 +70,16 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
             }
         }
         if responses.is_empty() {
-            panic!("No responses received");
+            return Err("No responses received");
         }
         let enough_responses = responses.len() >= fast_quorum;
         let all_same = responses.iter().all(|r| r == &responses[0]);
         if enough_responses && all_same && responses[0].is_ok() {
-            return;
+            return Ok(());
         }
 
         // We do not have a fast quorum and must continue to a slow quorum
+        Err("Slow quorum is unimplemented")
     }
 
     /// Make a consistent request to the cluster
@@ -91,20 +96,19 @@ mod test {
     use crate::client::InconsistentReplicationClient;
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
     use crate::types::{IRMessage, Incrementable, NodeID};
-    use crate::{IRStorage, InconsistentReplicationServer};
-    use std::sync::Arc;
+    use crate::InconsistentReplicationServer;
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
-        let network = MockIRNetwork::<_, _, MockIRStorage>::new();
-        let storage = MockIRStorage {};
+        let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
+        let storage = MockIRStorage::new();
         let client = InconsistentReplicationClient::new(network.clone(), storage, 1);
         mock_cluster(&network, 1).await;
         let a = client.invoke_inconsistent(&[4, 5, 6]).await;
     }
 
     async fn mock_cluster<ID: NodeID + Incrementable, MSG: IRMessage>(
-        network: &MockIRNetwork<ID, MSG, MockIRStorage>,
+        network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG>>,
         first_node: ID,
     ) {
         let mut node_id = first_node.clone();
@@ -113,7 +117,7 @@ mod test {
                 node_id.clone(),
                 InconsistentReplicationServer::new(
                     network.clone(),
-                    MockIRStorage {},
+                    MockIRStorage::new(),
                     node_id.clone(),
                 ),
             );

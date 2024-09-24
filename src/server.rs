@@ -39,6 +39,7 @@ where
 
 ///
 #[derive(Clone)]
+#[allow(unused)]
 enum ViewState {
     Normal { view: usize },
     ViewChanging { view: usize },
@@ -68,7 +69,7 @@ impl<N: IRNetwork<I, M>, S: IRStorage<I, M>, I: NodeID, M: IRMessage>
             .record_tentative(client_id, operation_sequence, message)
     }
 
-    pub fn exec_consistent(&self, message: M) -> M {
+    pub fn exec_consistent(&self, _message: M) -> M {
         unimplemented!("Implement me!");
     }
 }
@@ -82,8 +83,8 @@ mod test {
     #[tokio::test]
     pub async fn starts_in_view_zero() {
         // when
-        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage>::new();
-        let storage = MockIRStorage {};
+        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
+        let storage = MockIRStorage::new();
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()));

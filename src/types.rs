@@ -1,5 +1,4 @@
 use std::ops::Add;
-use std::sync::Arc;
 
 pub trait NodeID: Clone + PartialEq + Ord + PartialOrd {}
 
