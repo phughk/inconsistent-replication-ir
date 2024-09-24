@@ -1,13 +1,13 @@
-use crate::io::{ClientStorage, IRNetwork};
+use crate::io::IRNetwork;
 use crate::types::{IRMessage, NodeID};
+use crate::IRStorage;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::marker::PhantomData;
-use std::sync::OnceState;
 
 pub struct InconsistentReplicationClient<
     N: IRNetwork<I, M>,
-    S: ClientStorage,
+    S: IRStorage<I, M>,
     I: NodeID,
     M: IRMessage,
 > {
@@ -17,7 +17,7 @@ pub struct InconsistentReplicationClient<
     _a: PhantomData<M>,
 }
 
-impl<NET: IRNetwork<ID, MSG>, STO: ClientStorage, ID: NodeID, MSG: IRMessage>
+impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessage>
     InconsistentReplicationClient<NET, STO, ID, MSG>
 {
     pub fn new(network: NET, storage: STO, client_id: ID) -> Self {
@@ -78,12 +78,16 @@ impl<NET: IRNetwork<ID, MSG>, STO: ClientStorage, ID: NodeID, MSG: IRMessage>
 mod test {
     use crate::client::InconsistentReplicationClient;
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
-        let network = MockIRNetwork {};
+        let network = MockIRNetwork::<_, _, MockIRStorage>::new();
         let storage = MockIRStorage {};
-        let client = InconsistentReplicationClient::new(network, storage, "1");
-        client.invoke_inconsistent("Hello, world!").await;
+        let client =
+            InconsistentReplicationClient::new(network, storage, Arc::new("1".to_string()));
+        let a = client
+            .invoke_inconsistent(Arc::new("Hello, world!".to_string()))
+            .await;
     }
 }

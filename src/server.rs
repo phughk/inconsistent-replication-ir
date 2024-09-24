@@ -5,19 +5,38 @@ use std::marker::PhantomData;
 /// Implementation of a server node for receiving and handling operations according to the
 /// Inconsistent Replication algorithm.
 pub struct InconsistentReplicationServer<
-    N: IRNetwork<I, M>,
-    S: IRStorage<I, M>,
+    NET: IRNetwork<ID, MSG>,
+    STO: IRStorage<ID, MSG>,
+    ID: NodeID,
+    MSG: IRMessage,
+> {
+    network: NET,
+    storage: STO,
+    node_id: ID,
+    view: ViewState,
+    _a: PhantomData<MSG>,
+}
+
+impl<N, S, I, M> Clone for InconsistentReplicationServer<N, S, I, M>
+where
+    N: IRNetwork<I, M> + Clone,
+    S: IRStorage<I, M> + Clone,
     I: NodeID,
     M: IRMessage,
-> {
-    network: N,
-    storage: S,
-    node_id: I,
-    view: ViewState,
-    _a: PhantomData<M>,
+{
+    fn clone(&self) -> Self {
+        InconsistentReplicationServer {
+            network: self.network.clone(),
+            storage: self.storage.clone(),
+            node_id: self.node_id.clone(),
+            view: self.view.clone(),
+            _a: PhantomData,
+        }
+    }
 }
 
 ///
+#[derive(Clone)]
 enum ViewState {
     Normal { view: usize },
     ViewChanging { view: usize },
@@ -37,11 +56,11 @@ impl<N: IRNetwork<I, M>, S: IRStorage<I, M>, I: NodeID, M: IRMessage>
         }
     }
 
-    pub fn exec_inconsistent(&self, message: M) {
+    pub fn exec_inconsistent(&self, message: M) -> M {
         unimplemented!("Implement me!");
     }
 
-    pub fn exec_consistent(&self, message: M) {
+    pub fn exec_consistent(&self, message: M) -> M {
         unimplemented!("Implement me!");
     }
 }
@@ -50,14 +69,17 @@ impl<N: IRNetwork<I, M>, S: IRStorage<I, M>, I: NodeID, M: IRMessage>
 mod test {
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
     use crate::server::InconsistentReplicationServer;
+    use std::sync::Arc;
 
     #[tokio::test]
-    pub fn starts_in_view_zero() {
+    pub async fn starts_in_view_zero() {
         // when
-        let network = MockIRNetwork {};
+        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage>::new();
         let storage = MockIRStorage {};
 
-        let server = InconsistentReplicationServer::new(network, storage, "1");
+        let server =
+            InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()));
+        network.register_node(Arc::new("1".to_string()), server.clone());
         // server.get_view();
         unimplemented!("Implement me!");
     }
