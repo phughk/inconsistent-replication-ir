@@ -95,7 +95,7 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
 mod test {
     use crate::client::InconsistentReplicationClient;
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
-    use crate::types::{IRMessage, Incrementable, NodeID};
+    use crate::types::{IRMessage, NodeID};
     use crate::InconsistentReplicationServer;
 
     #[tokio::test]
@@ -136,7 +136,7 @@ mod test {
         assert!(a.is_err());
     }
 
-    async fn mock_cluster<ID: NodeID + Incrementable, MSG: IRMessage>(
+    async fn mock_cluster<ID: NodeID, MSG: IRMessage>(
         network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG>>,
         nodes: &[ID],
     ) {
