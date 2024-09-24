@@ -44,7 +44,7 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
         let records = self.records.clone();
         Box::pin(async move {
             let mut map = records.write().await;
-            if let Some((state, msg)) = map.get_mut(&(client, operation)) {
+            if let Some((state, _msg)) = map.get_mut(&(client, operation)) {
                 *state = State::Finalized;
             }
         })

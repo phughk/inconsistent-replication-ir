@@ -102,17 +102,22 @@ mod test {
     async fn client_can_make_inconsistent_requests() {
         let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
         let storage = MockIRStorage::new();
-        let client = InconsistentReplicationClient::new(network.clone(), storage, 1);
-        mock_cluster(&network, 1).await;
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
+        mock_cluster(&network, &[1, 2, 3, 4]).await;
+        // Prevent the first request from working
+        network.drop_packets_add(1, 1);
+        network.drop_packets_add(2, 1);
         let a = client.invoke_inconsistent(&[4, 5, 6]).await;
+        assert!(a.is_err());
+        let b = client.invoke_inconsistent(&[4, 5, 6]).await;
+        assert!(b.is_ok());
     }
 
     async fn mock_cluster<ID: NodeID + Incrementable, MSG: IRMessage>(
         network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG>>,
-        first_node: ID,
+        nodes: &[ID],
     ) {
-        let mut node_id = first_node.clone();
-        for _ in 0..4 {
+        for node_id in nodes {
             network.register_node(
                 node_id.clone(),
                 InconsistentReplicationServer::new(
@@ -121,7 +126,6 @@ mod test {
                     node_id.clone(),
                 ),
             );
-            node_id = node_id.increment();
         }
     }
 }

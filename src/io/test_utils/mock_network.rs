@@ -1,9 +1,12 @@
 use crate::types::{IRMessage, NodeID};
 use crate::{IRNetwork, IRStorage, InconsistentReplicationServer};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+
+type DropPacketCounter<ID> = Arc<RwLock<BTreeMap<ID, AtomicUsize>>>;
 
 pub struct MockIRNetwork<
     ID: NodeID + 'static,
@@ -15,6 +18,7 @@ pub struct MockIRNetwork<
             BTreeMap<ID, InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>>,
         >,
     >,
+    drop_packets: DropPacketCounter<ID>,
 }
 
 impl<ID, MSG, STO> Clone for MockIRNetwork<ID, MSG, STO>
@@ -26,6 +30,7 @@ where
     fn clone(&self) -> Self {
         MockIRNetwork {
             nodes: self.nodes.clone(),
+            drop_packets: self.drop_packets.clone(),
         }
     }
 }
@@ -47,7 +52,11 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
         let nodes = self.nodes.clone();
+        let drop_packets = self.drop_packets.clone();
         Box::pin(async move {
+            if Self::should_drop(drop_packets, &destination) {
+                return Err(());
+            }
             let msg = nodes
                 .try_read()
                 .unwrap()
@@ -64,6 +73,7 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG,
     pub fn new() -> Self {
         MockIRNetwork {
             nodes: Arc::new(RwLock::new(BTreeMap::new())),
+            drop_packets: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
@@ -75,5 +85,36 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG,
         server: InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>,
     ) {
         self.nodes.try_write().unwrap().insert(node_id, server);
+    }
+
+    pub fn drop_packets_add(&self, node_id: ID, drop_packets: usize) {
+        self.drop_packets
+            .try_write()
+            .unwrap()
+            .entry(node_id)
+            .or_insert(AtomicUsize::new(0))
+            .fetch_add(drop_packets, Ordering::SeqCst);
+    }
+
+    /// True, if the packet should be dropped
+    fn should_drop(counter: DropPacketCounter<ID>, id: &ID) -> bool {
+        let locked = counter.read().unwrap();
+        match locked.get(id) {
+            None => false,
+            Some(c) => {
+                match c.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |mut x| {
+                    if x > 0 {
+                        x -= 1;
+                        Some(x)
+                    } else {
+                        None
+                    }
+                }) {
+                    Ok(0) => false,
+                    Ok(_) => true,
+                    Err(_previous_value_was_zero) => false,
+                }
+            }
+        }
     }
 }
