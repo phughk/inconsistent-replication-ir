@@ -57,8 +57,13 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     ) -> Pin<Box<dyn Future<Output = Result<View<I>, ()>>>>;
 }
 
+pub trait StorageShared<ID: NodeID> {
+    /// Used by clients and servers to recover the current view, thus obtaining members
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>>;
+}
+
 /// Provides access to a storage log for views and persistence
-pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
+pub trait IRStorage<ID: NodeID, MSG: IRMessage> : StorageShared<ID> {
     /// Record a message as tentative for a client and operation number
     /// The message must be recorded as tentative even if the operation is rejected
     /// This is to resolve quorums
@@ -76,6 +81,8 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
         operation: u64,
     ) -> Pin<Box<dyn Future<Output = ()>>>;
 
-    /// Used by clients and servers to recover the current view, thus obtaining members
-    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>>;
+}
+
+/// Provides access to persistence for the client
+pub trait IRClientStorage<ID: NodeID, MSG: IRMessage> : StorageShared<ID> {
 }

@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::io::{IRClientStorage, StorageShared};
 
 #[derive(Clone)]
 pub struct MockIRStorage<ID: NodeID + 'static, MSG: IRMessage + 'static> {
@@ -16,6 +17,13 @@ pub struct MockIRStorage<ID: NodeID + 'static, MSG: IRMessage + 'static> {
 enum State {
     Tentative,
     Finalized,
+}
+
+impl<ID: NodeID + 'static, MSG: IRMessage + 'static> StorageShared<ID> for MockIRStorage<ID, MSG> {
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output =View<ID>>>> {
+        let view = self.current_view.clone();
+        Box::pin(async move { view.read().await.clone() })
+    }
 }
 
 impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for MockIRStorage<ID, MSG> {
@@ -55,11 +63,10 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
             }
         })
     }
+}
 
-    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output =View<ID>>>> {
-        let view = self.current_view.clone();
-        Box::pin(async move { view.read().await.clone() })
-    }
+impl <ID: NodeID, MSG: IRMessage> IRClientStorage<ID, MSG> for MockIRStorage<ID, MSG> {
+
 }
 
 impl<ID: NodeID + 'static, MSG: IRMessage + 'static> MockIRStorage<ID, MSG> {

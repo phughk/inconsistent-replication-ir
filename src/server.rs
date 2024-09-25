@@ -4,6 +4,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Implementation of a server node for receiving and handling operations according to the
 /// Inconsistent Replication algorithm.
@@ -16,7 +17,7 @@ pub struct InconsistentReplicationServer<
     network: NET,
     storage: Arc<STO>,
     node_id: ID,
-    view: View<ID>,
+    view: Arc<RwLock<View<ID>>>,
     _a: PhantomData<MSG>,
 }
 
@@ -68,7 +69,7 @@ impl<
             network,
             storage: Arc::new(storage),
             node_id,
-            view,
+            view: Arc::new(RwLock::new(view)),
             _a: PhantomData,
         }
     }
@@ -85,6 +86,8 @@ impl<
         // TODO maybe read lock?
         let view = self.view.clone();
         Box::pin(async move {
+            let view = view.read().await.clone();
+            assert_eq!(view.state,ViewState::Normal);
             let m = storage
                 .record_tentative(client_id, operation_sequence, message)
                 .await;
@@ -102,6 +105,8 @@ impl<
         let storage = self.storage.clone();
         let view = self.view.clone();
         Box::pin(async move {
+            let view = view.read().await.clone();
+            assert_eq!(view.state,ViewState::Normal);
             let _ = storage
                 .promote_finalized_and_run(client_id, operation_sequence)
                 .await;
@@ -117,6 +122,12 @@ impl<
     /// Finalize and execute a consistent operation
     pub fn exec_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
         unimplemented!("Implement me!");
+    }
+
+    async fn do_view_change(&self, new_view: View<I>) {
+        assert_eq!(new_view.state, ViewState::ViewChanging);
+        let old_view = self.view.write().await;
+        assert!(new_view.view > old_view.view);
     }
 }
 
@@ -140,7 +151,8 @@ mod test {
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()))
                 .await;
         network.register_node(Arc::new("1".to_string()), server.clone());
-        assert_eq!(&server.view, &View{view: 3, members: members.clone(), state: ViewState::Normal});
+        let lock = server.view.read().await;
+        assert_eq!(&*lock, &View{view: 3, members: members.clone(), state: ViewState::Normal});
     }
 
     #[tokio::test]

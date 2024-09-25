@@ -1,4 +1,4 @@
-use crate::io::IRNetwork;
+use crate::io::{IRClientStorage, IRNetwork};
 use crate::server::View;
 use crate::types::{DecideFunction, IRMessage, NodeID};
 use crate::IRStorage;
@@ -36,7 +36,7 @@ const fn slow_quorum(nodes: usize) -> usize {
 
 pub struct InconsistentReplicationClient<
     N: IRNetwork<I, M>,
-    S: IRStorage<I, M>,
+    S: IRClientStorage<I, M>,
     I: NodeID,
     M: IRMessage,
 > {
@@ -49,7 +49,7 @@ pub struct InconsistentReplicationClient<
     _a: PhantomData<M>,
 }
 
-impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeID+'static, MSG: IRMessage+'static>
+impl<NET: IRNetwork<ID, MSG>+'static, STO: IRClientStorage<ID, MSG>+'static, ID: NodeID+'static, MSG: IRMessage+'static>
     InconsistentReplicationClient<NET, STO, ID, MSG>
 {
     pub async fn new(network: NET, storage: STO, client_id: ID) -> Self {
@@ -188,6 +188,18 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
                 .unwrap();
         }
         Ok(())
+    }
+
+    /// Use this function to make the client additionally make requests to these nodes
+    /// Only nodes in the current view are considered for quorum, so this is a useful way to
+    /// add nodes to the network.
+    ///
+    /// If the nodes respond with a normal view (i.e. caught up), a view change will be initiated.
+    ///
+    /// The list of additional nodes is cleared on view change.
+    pub async fn add_nodes_to_probe(&self, nodes: Vec<ID>) {
+        let mut additional_nodes = self.additional_nodes.write().await;
+        additional_nodes.extend(nodes);
     }
 
     /// Given an iterable of views, and a provided expected view
