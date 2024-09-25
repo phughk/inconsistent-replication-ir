@@ -152,13 +152,9 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         let all_same = responses.iter().all(|r| r == &responses[0]);
         if enough_responses && all_same && responses[0].is_ok() {
             for node in nodes {
+                let (response, _view) = responses[0].clone().unwrap();
                 self.network
-                    .async_finalize(
-                        node,
-                        self.client_id.clone(),
-                        sequence,
-                        responses[0].clone().unwrap(),
-                    )
+                    .async_finalize(node, self.client_id.clone(), sequence, response)
                     .await
                     .unwrap();
             }
@@ -174,7 +170,7 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         let mut votes = BTreeSet::new();
         for response in responses {
             match response {
-                Ok(response) => {
+                Ok((response, _view)) => {
                     votes.insert(response);
                 }
                 Err(_e) => {
@@ -211,6 +207,24 @@ mod test {
         assert_eq!(super::f(5), 2);
         assert_eq!(super::f(6), 2);
         assert_eq!(super::f(7), 3);
+    }
+
+    #[test]
+    fn test_fast_quorum() {
+        assert_eq!(super::fast_quorum(3), 2);
+        assert_eq!(super::fast_quorum(4), 2);
+        assert_eq!(super::fast_quorum(5), 4);
+        assert_eq!(super::fast_quorum(6), 4);
+        assert_eq!(super::fast_quorum(7), 5);
+    }
+
+    #[test]
+    fn test_slow_quorum() {
+        assert_eq!(super::slow_quorum(3), 2);
+        assert_eq!(super::slow_quorum(4), 2);
+        assert_eq!(super::slow_quorum(5), 3);
+        assert_eq!(super::slow_quorum(6), 3);
+        assert_eq!(super::slow_quorum(7), 4);
     }
 
     #[tokio::test]
@@ -262,7 +276,8 @@ mod test {
                     network.clone(),
                     MockIRStorage::new(),
                     node_id.clone(),
-                ),
+                )
+                .await,
             );
         }
     }

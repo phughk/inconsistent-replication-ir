@@ -1,0 +1,18 @@
+= Inconsistent Replication (IR) in Rust
+
+This is an implementation of Inconsistent Replication (IR) in Rust.
+IR is an algorithm to replicate data in a distributed system.
+While the data on each node is not consistent (nodes may give different responses), the data is linearizable (any single "entity" in the system will have operations applied to them in order and atomically).
+
+The crate is designed in a way to accommodate any storage engine and networking protocols.
+
+== Correctness
+
+The crate is designed with fuzz testing and simulation testing in mind.
+Any state can be reproduced as a unit test using the provided `MockNetwork` and `MockStorage` structs.
+
+== Usage
+
+Initialise the `InconsistentReplicationServer` and/or `InconsistentReplicationClient` structs with a custom `Storage` and `Network` implementation.
+
+Server nodes can also be clients.

@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub mod test_utils;
 
+use crate::server::ViewState;
 use crate::types::{IRMessage, NodeID};
 use std::future::Future;
 use std::pin::Pin;
@@ -17,7 +18,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
 
     /// Used by clients to make a consistent request to a specific node
     fn request_consistent(
@@ -26,7 +27,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
@@ -47,7 +48,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
 }
 
 /// Provides access to a storage log for views and persistence
@@ -64,4 +65,6 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
 
     /// Promote a tentative record to finalized
     fn promote_finalized(&self, client: ID, operation: u64) -> Pin<Box<dyn Future<Output = ()>>>;
+
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = ViewState>>>;
 }

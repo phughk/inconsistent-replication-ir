@@ -1,3 +1,4 @@
+use crate::server::ViewState;
 use crate::types::{IRMessage, NodeID};
 use crate::{IRNetwork, IRStorage, InconsistentReplicationServer};
 use std::collections::BTreeMap;
@@ -50,7 +51,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
         let nodes = self.nodes.clone();
         let drop_packets = self.drop_packets.clone();
         Box::pin(async move {
@@ -74,7 +75,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M, ()>>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
         todo!()
     }
 
@@ -94,7 +95,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
         todo!()
     }
 }
