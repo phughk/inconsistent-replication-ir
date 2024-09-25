@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::RwLock;
 
 /// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
 /// Minimum cluster size of f=1 is 3
@@ -40,22 +41,26 @@ pub struct InconsistentReplicationClient<
     M: IRMessage,
 > {
     network: Arc<N>,
-    #[allow(unused)]
     storage: S,
     client_id: I,
     sequence: AtomicU64,
+    latest_view: View<I>,
+    additional_nodes: RwLock<Vec<I>>,
     _a: PhantomData<M>,
 }
 
 impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeID+'static, MSG: IRMessage+'static>
     InconsistentReplicationClient<NET, STO, ID, MSG>
 {
-    pub fn new(network: NET, storage: STO, client_id: ID) -> Self {
+    pub async fn new(network: NET, storage: STO, client_id: ID) -> Self {
+        let view = storage.recover_current_view().await;
         InconsistentReplicationClient {
             network: Arc::new(network),
             storage,
             client_id,
             sequence: AtomicU64::new(0),
+            latest_view: view,
+            additional_nodes: RwLock::new(Vec::new()),
             _a: PhantomData,
         }
     }
@@ -64,7 +69,7 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
     /// Inconsistent requests happen in any order
     /// Conflict resolution is done by the client after receiving responses
     pub async fn invoke_inconsistent(&self, message: MSG) -> Result<MSG, &'static str> {
-        let nodes = self.storage.recover_current_view().await.members;
+        let nodes = &self.latest_view.members;
         let nodes_len = nodes.len();
 
         if nodes_len < MINIMUM_CLUSTER_SIZE {
@@ -314,7 +319,7 @@ mod test {
         mock_cluster(&network, members).await;
 
         // and a client
-        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 0).await;
 
         // when the client makes a request
         let result = client.invoke_inconsistent(&[4, 5, 6]).await;
@@ -332,7 +337,7 @@ mod test {
         mock_cluster(&network, members).await;
 
         // and a client
-        let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
+        let client = InconsistentReplicationClient::new(network.clone(), storage, 0).await;
 
         // when we prevent the request from being sent
         network.drop_requests_add(1, 2000);
