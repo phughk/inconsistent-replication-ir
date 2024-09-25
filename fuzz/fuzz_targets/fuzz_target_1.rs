@@ -5,6 +5,13 @@ use inconsistent_replication_ir::test_utils::{MockIRNetwork, MockIRStorage};
 use inconsistent_replication_ir::types::DecideFunction;
 use inconsistent_replication_ir::{InconsistentReplicationClient, InconsistentReplicationServer};
 use libfuzzer_sys::{arbitrary, fuzz_target};
+use std::collections::BTreeMap;
+
+const MAX_NODES: usize = 10;
+const MAX_CLIENTS: usize = 10;
+
+type KEY = u8;
+type VALUE = u8;
 
 #[derive(Debug)]
 struct TestScenario {
@@ -16,8 +23,8 @@ struct TestScenario {
 impl<'a> Arbitrary<'a> for TestScenario {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         Ok(TestScenario {
-            nodes: u.int_in_range(1..=10)?,
-            clients: u.int_in_range(1..=10)?,
+            nodes: u.int_in_range(1..=MAX_NODES)?,
+            clients: u.int_in_range(1..=MAX_CLIENTS)?,
             steps: u.arbitrary()?,
         })
     }
@@ -25,16 +32,37 @@ impl<'a> Arbitrary<'a> for TestScenario {
 
 #[derive(arbitrary::Arbitrary, Debug)]
 enum TestStep {
-    InconsistentMessage { client: usize, message: u8 },
-    ConsistentMessage { client: usize, message: u8 },
+    InconsistentMessage { client: usize, message: Message },
+    ConsistentMessage { client: usize, message: Message },
     DropRequest { who: usize },
     DropResponse { who: usize },
 }
 
-pub struct TestDecideFunction;
-impl DecideFunction<u8> for TestDecideFunction {
-    fn decide<'a, S: IntoIterator<Item = &'a u8>>(&self, _values: S) -> &'a u8 {
-        _values.into_iter().next().unwrap()
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Arbitrary)]
+pub enum Message {
+    Request(RequestPayload),
+    Response(ResponsePayload),
+}
+
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Arbitrary)]
+pub struct RequestPayload {
+    reads: Vec<KEY>,
+    writes: BTreeMap<KEY, VALUE>,
+}
+
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Arbitrary)]
+pub struct ResponsePayload {
+    reads: BTreeMap<KEY, Vec<VALUE>>,
+    writes: BTreeMap<KEY, Vec<VALUE>>,
+}
+
+pub struct TestDecideFunction {
+    request: Message,
+}
+impl DecideFunction<Message> for TestDecideFunction {
+    fn decide<'a, S: IntoIterator<Item = &'a Message>>(&self, _values: S) -> &'a Message {
+        let values: Vec<&'a Message> = _values.into_iter().collect();
+        values.first().unwrap()
     }
 }
 
@@ -68,7 +96,7 @@ fuzz_target!(|data: TestScenario| {
             TestStep::ConsistentMessage { client, message } => smol::block_on(async {
                 let client_id = client % clients.len();
                 let _result = clients[client_id]
-                    .invoke_consistent(message, TestDecideFunction {})
+                    .invoke_consistent(message.clone(), TestDecideFunction { request: message })
                     .await;
             }),
             TestStep::DropRequest { who } => {
