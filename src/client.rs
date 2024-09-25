@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
@@ -38,7 +39,7 @@ pub struct InconsistentReplicationClient<
     I: NodeID,
     M: IRMessage,
 > {
-    network: N,
+    network: Arc<N>,
     #[allow(unused)]
     storage: S,
     client_id: I,
@@ -46,12 +47,12 @@ pub struct InconsistentReplicationClient<
     _a: PhantomData<M>,
 }
 
-impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessage>
+impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeID+'static, MSG: IRMessage+'static>
     InconsistentReplicationClient<NET, STO, ID, MSG>
 {
     pub fn new(network: NET, storage: STO, client_id: ID) -> Self {
         InconsistentReplicationClient {
-            network,
+            network: Arc::new(network),
             storage,
             client_id,
             sequence: AtomicU64::new(0),
@@ -72,13 +73,17 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
 
         // Initiate requests
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let network = self.network.clone();
+        let client_id = self.client_id.clone();
         let mut responses = self
-            .request_until_quorum(&nodes, sequence, message, |node, sequence, message, _| {
-                Box::pin(async {
-                    let (id, r) = self
-                        .propose_inconsistent_helper(node.clone(), sequence, message, None)
-                        .await;
-                    (id, r.map_err(|_| "Failed to propose inconsistent"))
+            .request_until_quorum(&nodes, sequence, message, move |node, sequence, message, _| {
+                Box::pin({
+                    let network = network.clone();
+                    let client_id = client_id.clone();
+                    async move {
+                        let r = network.propose_inconsistent(node.clone(), client_id, sequence, message, None).await;
+                        (node, r.map_err(|_| "Failed to propose inconsistent"))
+                    }
                 })
             })
             .await?;
@@ -130,14 +135,21 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
 
         // Initiate requests
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let network = self.network.clone();
+        let client_id = self.client_id.clone();
         let responses = self
             .request_until_quorum(&nodes, sequence, message, |node, sequence, message, _| {
-                Box::pin(async {
-                    let res = self
-                        .network
-                        .propose_consistent(node.clone(), self.client_id.clone(), sequence, message)
-                        .await;
-                    (node, res.map_err(|_| "Failed to propose consistent"))
+                Box::pin({
+                    let network = network.clone();
+                    let client_id = client_id.clone();
+                    // Copy 🤡
+                    let sequence = sequence;
+                    async move {
+                        let res = network
+                            .propose_consistent(node.clone(), client_id, sequence, message)
+                            .await;
+                        (node, res.map_err(|_| "Failed to propose consistent"))
+                    }
                 })
             })
             .await?;
@@ -146,9 +158,9 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         let all_same = responses.iter().all(|r| r == &responses[0]);
         if all_same {
             for node in nodes {
-                let (response, _view) = responses[0].clone().unwrap();
+                let (_node_id, (msg, view)) = responses[0].clone();
                 self.network
-                    .async_finalize(node, self.client_id.clone(), sequence, response)
+                    .async_finalize(node, self.client_id.clone(), sequence, msg)
                     .await
                     .unwrap();
             }

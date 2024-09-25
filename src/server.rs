@@ -153,6 +153,7 @@ mod test {
             Arc::new("1".to_string()),
             1,
             Arc::new("msg".to_string()),
+            None,
         );
     }
 }

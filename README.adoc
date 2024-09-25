@@ -13,14 +13,14 @@ Any state can be reproduced as a unit test using the provided `MockNetwork` and 
 
 === Fuzzing
 
-You neeed `cargo fuzz` and rust `nightly`.
+You need `cargo fuzz` and rust `nightly`.
 
-```
+[source,bash]
+----
 cargo install cargo-fuzz
 cargo fuzz list
-rustup default nightly
-cargo fuzz run fuzz_target_1
-```
+cargo +nightly fuzz run fuzz_target_1
+----
 
 == Usage
 
