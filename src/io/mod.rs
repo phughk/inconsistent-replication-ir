@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test"))]
 pub mod test_utils;
 
 use crate::server::ViewState;

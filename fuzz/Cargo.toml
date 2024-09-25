@@ -9,9 +9,12 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3.2", features = ["derive"] }
+smol = "2.0.2"
 
 [dependencies.inconsistent-replication-ir]
 path = ".."
+features = ["test"]
 
 [[bin]]
 name = "fuzz_target_1"

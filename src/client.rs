@@ -255,8 +255,8 @@ mod test {
         let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
 
         // when we prevent the request from being sent
-        network.drop_packets_add(1, 1);
-        network.drop_packets_add(2, 1);
+        network.drop_requests_add(1, 1);
+        network.drop_requests_add(2, 1);
 
         // and we make the client perform the requests
         let result = client.invoke_inconsistent(&[4, 5, 6]).await;

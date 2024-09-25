@@ -19,7 +19,8 @@ pub struct MockIRNetwork<
             BTreeMap<ID, InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>>,
         >,
     >,
-    drop_packets: DropPacketCounter<ID>,
+    drop_requests: DropPacketCounter<ID>,
+    drop_responses: DropPacketCounter<ID>,
 }
 
 impl<ID, MSG, STO> Clone for MockIRNetwork<ID, MSG, STO>
@@ -31,7 +32,8 @@ where
     fn clone(&self) -> Self {
         MockIRNetwork {
             nodes: self.nodes.clone(),
-            drop_packets: self.drop_packets.clone(),
+            drop_requests: self.drop_requests.clone(),
+            drop_responses: self.drop_responses.clone(),
         }
     }
 }
@@ -53,9 +55,10 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
         let nodes = self.nodes.clone();
-        let drop_packets = self.drop_packets.clone();
+        let drop_requests = self.drop_requests.clone();
+        let drop_responses = self.drop_responses.clone();
         Box::pin(async move {
-            if Self::should_drop(drop_packets, &destination) {
+            if Self::should_drop(drop_requests, &destination) {
                 return Err(());
             }
             let msg = nodes
@@ -65,6 +68,9 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
                 .unwrap()
                 .exec_inconsistent(client_id, sequence, message)
                 .await;
+            if Self::should_drop(drop_responses, &destination) {
+                return Err(());
+            }
             Ok(msg)
         })
     }
@@ -104,7 +110,8 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG,
     pub fn new() -> Self {
         MockIRNetwork {
             nodes: Arc::new(RwLock::new(BTreeMap::new())),
-            drop_packets: Arc::new(RwLock::new(BTreeMap::new())),
+            drop_requests: Arc::new(RwLock::new(BTreeMap::new())),
+            drop_responses: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
@@ -118,8 +125,17 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG,
         self.nodes.try_write().unwrap().insert(node_id, server);
     }
 
-    pub fn drop_packets_add(&self, node_id: ID, drop_packets: usize) {
-        self.drop_packets
+    pub fn drop_requests_add(&self, node_id: ID, drop_packets: usize) {
+        self.drop_requests
+            .try_write()
+            .unwrap()
+            .entry(node_id)
+            .or_insert(AtomicUsize::new(0))
+            .fetch_add(drop_packets, Ordering::SeqCst);
+    }
+
+    pub fn drop_response_add(&self, node_id: ID, drop_packets: usize) {
+        self.drop_responses
             .try_write()
             .unwrap()
             .entry(node_id)
