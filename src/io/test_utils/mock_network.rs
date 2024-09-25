@@ -53,6 +53,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         client_id: I,
         sequence: u64,
         message: M,
+        highest_observed_view: Option<ViewState>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
@@ -66,7 +67,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
                 .unwrap()
                 .get(&destination)
                 .unwrap()
-                .propose_inconsistent(client_id, sequence, message)
+                .propose_inconsistent(client_id, sequence, message, highest_observed_view)
                 .await;
             if Self::should_drop(drop_responses, &destination) {
                 return Err(());

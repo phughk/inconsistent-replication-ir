@@ -81,6 +81,7 @@ impl<
         client_id: I,
         operation_sequence: u64,
         message: M,
+        highest_observed_view: Option<ViewState>,
     ) -> Pin<Box<dyn Future<Output = (M, ViewState)>>> {
         let storage = self.storage.clone();
         // TODO maybe read lock?
@@ -122,18 +123,36 @@ mod test {
     use std::sync::Arc;
 
     #[tokio::test]
-    pub async fn recovers_view() {
+    pub async fn recovers_view_from_storage() {
         // when
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
         let storage = MockIRStorage::new();
         storage
-            .set_current_view(ViewState::Normal { view: 0 })
+            .set_current_view(ViewState::Normal { view: 3 })
             .await;
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()))
                 .await;
         network.register_node(Arc::new("1".to_string()), server.clone());
-        assert_eq!(&server.view, &ViewState::Normal { view: 0 });
+        assert_eq!(&server.view, &ViewState::Normal { view: 3 });
+    }
+
+    #[tokio::test]
+    pub async fn changes_view_on_higher_value_propose_inconsistent() {
+        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
+        let storage = MockIRStorage::new();
+        storage
+            .set_current_view(ViewState::Normal { view: 3 })
+            .await;
+
+        let server =
+            InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()));
+        let new_view = ViewState::Normal { view: 4 };
+        server.await.propose_inconsistent(
+            Arc::new("1".to_string()),
+            1,
+            Arc::new("msg".to_string()),
+        );
     }
 }

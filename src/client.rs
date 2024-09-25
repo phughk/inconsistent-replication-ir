@@ -5,7 +5,9 @@ use crate::IRStorage;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
@@ -69,32 +71,18 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         }
 
         // Initiate requests
-        let mut requests = FuturesUnordered::new();
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        for node in nodes {
-            requests.push(self.propose_inconsistent_helper(node, sequence, message.clone()));
-        }
-        let mut responses = Vec::with_capacity(requests.len());
-
-        let mut attempts = 0;
-        while responses.len() < slow_quorum(nodes_len) && attempts < MAX_ATTEMPTS {
-            match requests.next().await {
-                Some((node, Ok(response))) => responses.push((node, response)),
-                Some((node, Err(_e))) => {
-                    // Retry the request
-                    attempts += 1;
-                    requests.push(self.propose_inconsistent_helper(
-                        node,
-                        sequence,
-                        message.clone(),
-                    ));
-                }
-                None => break,
-            }
-        }
-        if attempts >= MAX_ATTEMPTS {
-            return Err("Too many attempts");
-        }
+        let mut responses = self
+            .request_until_quorum(&nodes, sequence, message, |node, sequence, message, _| {
+                Box::pin(async {
+                    let (id, r) = self
+                        .propose_inconsistent_helper(node.clone(), sequence, message, None)
+                        .await;
+                    (id, r.map_err(|_| "Failed to propose inconsistent"))
+                })
+            })
+            .await?;
+        assert!(responses.len() >= slow_quorum(nodes_len));
 
         // Validate views
         if let Err(highest) = Self::validate_view(responses.iter().map(|r| &r.1 .1), None) {
@@ -113,20 +101,15 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         if responses.is_empty() {
             return Err("No responses received");
         }
-        let enough_responses = responses.len() >= fast_quorum(nodes_len);
         let expected_msg = &responses[0].1 .0;
         let all_same = responses.iter().all(|r| {
             let (_, (msg, _)) = r;
             msg == expected_msg
         });
-        if enough_responses && all_same {
+        if all_same {
             let (_node, (msg, _view)) = responses.into_iter().next().unwrap();
             return Ok(msg);
         }
-        println!(
-            "Enough responses = {}, all_same = {}",
-            enough_responses, all_same
-        );
         Err("Responses didn't match or weren't enough")
     }
 
@@ -144,42 +127,24 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         if nodes.len() < MINIMUM_CLUSTER_SIZE {
             return Err("Cluster size is too small");
         }
-        // Derive f, assuming cluster size is 2f+1
-        let f = (nodes.len() - 1) / 2;
 
         // Initiate requests
-        let mut requests = FuturesUnordered::new();
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        for node in &nodes {
-            requests.push(self.network.propose_consistent(
-                node.clone(),
-                self.client_id.clone(),
-                sequence,
-                message.clone(),
-            ));
-        }
-        let mut responses = Vec::with_capacity(requests.len());
+        let responses = self
+            .request_until_quorum(&nodes, sequence, message, |node, sequence, message, _| {
+                Box::pin(async {
+                    let res = self
+                        .network
+                        .propose_consistent(node.clone(), self.client_id.clone(), sequence, message)
+                        .await;
+                    (node, res.map_err(|_| "Failed to propose consistent"))
+                })
+            })
+            .await?;
+        assert!(responses.len() >= slow_quorum(nodes.len()));
 
-        // Fast (1-round-trip) quorum of 3f/2+1 with all responses the same
-        // This allows for single round-trip communication
-        let fast_quorum = 3 * f / 2 + 1;
-        // Slow quorum is f+1 (less than 3f/2+1) and requires more than 1 round trip
-        // TODO figure out if the is required
-        #[allow(unused)]
-        let slow_quorum = f + 1;
-
-        for _ in 0..fast_quorum {
-            match requests.next().await {
-                Some(response) => responses.push(response),
-                None => break,
-            }
-        }
-        if responses.is_empty() {
-            return Err("No responses received");
-        }
-        let enough_responses = responses.len() >= fast_quorum;
         let all_same = responses.iter().all(|r| r == &responses[0]);
-        if enough_responses && all_same && responses[0].is_ok() {
+        if all_same {
             for node in nodes {
                 let (response, _view) = responses[0].clone().unwrap();
                 self.network
@@ -190,22 +155,10 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
             return Ok(());
         }
 
-        // Drain remaining responses; Maybe this isn't necessary? We only need f+1
-        while let Some(a) = requests.next().await {
-            responses.push(a);
-        }
-
         // We do not have a fast quorum and must continue to a slow quorum
         let mut votes = BTreeSet::new();
-        for response in responses {
-            match response {
-                Ok((response, _view)) => {
-                    votes.insert(response);
-                }
-                Err(_e) => {
-                    // Node did not respond or something
-                }
-            }
+        for (_node_id, (msg, _view)) in responses {
+            votes.insert(msg);
         }
         // Now we let the decide function decide the result
         let result = decide_function.decide(votes.iter());
@@ -243,16 +196,61 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         }
     }
 
+    async fn request_until_quorum<
+        F: Fn(
+            ID,
+            u64,
+            MSG,
+            Option<ViewState>,
+        ) -> Pin<Box<dyn Future<Output = (ID, Result<(MSG, ViewState), &'static str>)>>>,
+    >(
+        &self,
+        nodes: &[ID],
+        sequence: u64,
+        message: MSG,
+        request: F,
+    ) -> Result<Vec<(ID, (MSG, ViewState))>, &'static str> {
+        let mut requests = FuturesUnordered::new();
+        for node in nodes {
+            requests.push(request(node.clone(), sequence, message.clone(), None));
+        }
+        let mut responses = Vec::with_capacity(requests.len());
+
+        let mut attempts = 0;
+        while responses.len() < slow_quorum(nodes.len()) && attempts < MAX_ATTEMPTS {
+            match requests.next().await {
+                Some((node, Ok(response))) => responses.push((node, response)),
+                Some((node, Err(_e))) => {
+                    // Retry the request
+                    attempts += 1;
+                    requests.push(request(node, sequence, message.clone(), None));
+                }
+                None => break,
+            }
+        }
+        if attempts >= MAX_ATTEMPTS {
+            return Err("Too many attempts");
+        }
+        Ok(responses)
+    }
+
     /// This helper is required so that we have a consistently-sized future
     async fn propose_inconsistent_helper(
         &self,
         node: ID,
         sequence: u64,
         message: MSG,
+        highest_observed_view: Option<ViewState>,
     ) -> (ID, Result<(MSG, ViewState), ()>) {
         let response = self
             .network
-            .propose_inconsistent(node.clone(), self.client_id.clone(), sequence, message)
+            .propose_inconsistent(
+                node.clone(),
+                self.client_id.clone(),
+                sequence,
+                message,
+                highest_observed_view,
+            )
             .await;
         (node, response)
     }

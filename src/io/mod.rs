@@ -18,6 +18,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
+        highest_observed_view: Option<ViewState>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
 
     /// Used by clients to make a consistent request to a specific node
