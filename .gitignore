@@ -32,3 +32,5 @@ Cargo.lock
 #/target
 .idea
 
+fuzz/artifacts
+fuzz/corpus

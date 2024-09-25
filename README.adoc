@@ -11,6 +11,17 @@ The crate is designed in a way to accommodate any storage engine and networking 
 The crate is designed with fuzz testing and simulation testing in mind.
 Any state can be reproduced as a unit test using the provided `MockNetwork` and `MockStorage` structs.
 
+=== Fuzzing
+
+You neeed `cargo fuzz` and rust `nightly`.
+
+```
+cargo install cargo-fuzz
+cargo fuzz list
+rustup default nightly
+cargo fuzz run fuzz_target_1
+```
+
 == Usage
 
 Initialise the `InconsistentReplicationServer` and/or `InconsistentReplicationClient` structs with a custom `Storage` and `Network` implementation.
