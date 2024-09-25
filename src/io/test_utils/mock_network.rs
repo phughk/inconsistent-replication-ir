@@ -39,13 +39,6 @@ where
 }
 
 impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNetwork<I, M, STO> {
-    fn get_members(&self) -> Pin<Box<dyn Future<Output = Vec<I>>>> {
-        let nodes = self.nodes.clone();
-        Box::pin(async move {
-            let a: Vec<I> = nodes.try_read().unwrap().keys().cloned().collect();
-            a
-        })
-    }
 
     fn propose_inconsistent(
         &self,

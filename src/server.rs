@@ -130,24 +130,26 @@ mod test {
     pub async fn recovers_view_from_storage() {
         // when
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
-        let storage = MockIRStorage::new();
+        let members = vec![Arc::new("1".to_string()),Arc::new("2".to_string()),Arc::new("3".to_string())];
+        let storage = MockIRStorage::new(members.clone());
         storage
-            .set_current_view(View{view: 3, members: vec![], state: ViewState::Normal})
+            .set_current_view(View{view: 3, members: members.clone(), state: ViewState::Normal})
             .await;
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()))
                 .await;
         network.register_node(Arc::new("1".to_string()), server.clone());
-        assert_eq!(&server.view, &View{view: 3, members: vec![], state: ViewState::Normal});
+        assert_eq!(&server.view, &View{view: 3, members: members.clone(), state: ViewState::Normal});
     }
 
     #[tokio::test]
     pub async fn changes_view_on_higher_value_propose_inconsistent() {
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
-        let storage = MockIRStorage::new();
+        let members = vec![Arc::new("1".to_string()),Arc::new("2".to_string()),Arc::new("3".to_string())];
+        let storage = MockIRStorage::new(members.clone());
         storage
-            .set_current_view(View{view: 3, members: vec![], state: ViewState::Normal})
+            .set_current_view(View{view: 3, members: members.clone(), state: ViewState::Normal})
             .await;
 
         let server =

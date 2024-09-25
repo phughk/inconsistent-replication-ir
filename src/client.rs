@@ -64,7 +64,7 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
     /// Inconsistent requests happen in any order
     /// Conflict resolution is done by the client after receiving responses
     pub async fn invoke_inconsistent(&self, message: MSG) -> Result<MSG, &'static str> {
-        let nodes = self.network.get_members().await;
+        let nodes = self.storage.recover_current_view().await.members;
         let nodes_len = nodes.len();
 
         if nodes_len < MINIMUM_CLUSTER_SIZE {
@@ -127,7 +127,8 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
         message: MSG,
         decide_function: F,
     ) -> Result<(), &'static str> {
-        let nodes = self.network.get_members().await;
+        let current_view = self.storage.recover_current_view().await;
+        let nodes = current_view.members;
 
         if nodes.len() < MINIMUM_CLUSTER_SIZE {
             return Err("Cluster size is too small");
@@ -308,8 +309,9 @@ mod test {
     async fn client_can_make_inconsistent_requests() {
         // given a cluster
         let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
-        let storage = MockIRStorage::new();
-        mock_cluster(&network, &[1, 2, 3]).await;
+        let members = vec![1, 2, 3];
+        let storage = MockIRStorage::new(members.clone());
+        mock_cluster(&network, members).await;
 
         // and a client
         let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
@@ -325,8 +327,9 @@ mod test {
     async fn client_fails_inconsistent_request_no_quorum() {
         // given a cluster
         let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
-        let storage = MockIRStorage::new();
-        mock_cluster(&network, &[1, 2, 3]).await;
+        let members = vec![1, 2, 3];
+        let storage = MockIRStorage::new(members.clone());
+        mock_cluster(&network, members).await;
 
         // and a client
         let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
@@ -344,14 +347,14 @@ mod test {
 
     async fn mock_cluster<ID: NodeID, MSG: IRMessage>(
         network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG>>,
-        nodes: &[ID],
+        nodes: Vec<ID>,
     ) {
-        for node_id in nodes {
+        for node_id in &nodes {
             network.register_node(
                 node_id.clone(),
                 InconsistentReplicationServer::new(
                     network.clone(),
-                    MockIRStorage::new(),
+                    MockIRStorage::new(nodes.clone()),
                     node_id.clone(),
                 )
                 .await,

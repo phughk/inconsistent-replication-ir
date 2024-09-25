@@ -63,10 +63,10 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
 }
 
 impl<ID: NodeID + 'static, MSG: IRMessage + 'static> MockIRStorage<ID, MSG> {
-    pub fn new() -> Self {
+    pub fn new(members: Vec<ID>) -> Self {
         MockIRStorage {
             records: Arc::new(RwLock::new(BTreeMap::new())),
-            current_view: Arc::new(RwLock::new(View{ view: 0, members: vec![] , state: ViewState::Normal})),
+            current_view: Arc::new(RwLock::new(View{ view: 0, members, state: ViewState::Normal})),
         }
     }
 

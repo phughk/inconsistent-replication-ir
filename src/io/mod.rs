@@ -8,8 +8,6 @@ use std::pin::Pin;
 
 /// Tracks membership, ID to IP address mapping, and messaging
 pub trait IRNetwork<I: NodeID, M: IRMessage> {
-    /// Get the current list of members in the view
-    fn get_members(&self) -> Pin<Box<dyn Future<Output = Vec<I>>>>;
 
     /// Used by clients to make an inconsistent request to a specific node
     fn propose_inconsistent(
@@ -78,5 +76,6 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
         operation: u64,
     ) -> Pin<Box<dyn Future<Output = ()>>>;
 
+    /// Used by clients and servers to recover the current view, thus obtaining members
     fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>>;
 }
