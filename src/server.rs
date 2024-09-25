@@ -40,11 +40,21 @@ where
 
 ///
 #[derive(Clone, Eq, PartialEq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(any(test, debug_assertions), derive(Debug))]
 pub enum ViewState {
     Normal { view: u64 },
     ViewChanging { view: u64 },
     Recovery { view: u64 },
+}
+
+impl ViewState {
+    pub fn view(&self) -> u64 {
+        match self {
+            ViewState::Normal { view } => *view,
+            ViewState::ViewChanging { view } => *view,
+            ViewState::Recovery { view } => *view,
+        }
+    }
 }
 
 impl<
@@ -65,7 +75,8 @@ impl<
         }
     }
 
-    pub fn exec_inconsistent(
+    /// Invoked on propose message
+    pub fn propose_inconsistent(
         &self,
         client_id: I,
         operation_sequence: u64,
@@ -79,6 +90,23 @@ impl<
                 .record_tentative(client_id, operation_sequence, message)
                 .await;
             (m, view)
+        })
+    }
+
+    /// Invoked on finalize message
+    pub fn exec_inconsistent(
+        &self,
+        client_id: I,
+        operation_sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = (M, ViewState)>>> {
+        let storage = self.storage.clone();
+        let view = self.view.clone();
+        Box::pin(async move {
+            let _ = storage
+                .promote_finalized_and_run(client_id, operation_sequence)
+                .await;
+            (message, view)
         })
     }
 

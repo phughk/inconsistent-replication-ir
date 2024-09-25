@@ -30,7 +30,7 @@ impl<'a> Arbitrary<'a> for TestScenario {
     }
 }
 
-#[derive(arbitrary::Arbitrary, Debug)]
+#[derive(Arbitrary, Debug)]
 enum TestStep {
     InconsistentMessage { client: usize, message: Message },
     ConsistentMessage { client: usize, message: Message },

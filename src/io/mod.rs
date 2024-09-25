@@ -12,7 +12,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     fn get_members(&self) -> Pin<Box<dyn Future<Output = Vec<I>>>>;
 
     /// Used by clients to make an inconsistent request to a specific node
-    fn request_inconsistent(
+    fn propose_inconsistent(
         &self,
         destination: I,
         client_id: I,
@@ -21,7 +21,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
 
     /// Used by clients to make a consistent request to a specific node
-    fn request_consistent(
+    fn propose_consistent(
         &self,
         destination: I,
         client_id: I,
@@ -49,6 +49,13 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
+
+    /// A client that detects a higher view will notify a node to change view
+    fn invoke_view_change(
+        &self,
+        destination: I,
+        view: ViewState,
+    ) -> Pin<Box<dyn Future<Output = Result<ViewState, ()>>>>;
 }
 
 /// Provides access to a storage log for views and persistence
@@ -63,8 +70,12 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 
-    /// Promote a tentative record to finalized
-    fn promote_finalized(&self, client: ID, operation: u64) -> Pin<Box<dyn Future<Output = ()>>>;
+    /// Promote a tentative operation to finalized and execute it
+    fn promote_finalized_and_run(
+        &self,
+        client: ID,
+        operation: u64,
+    ) -> Pin<Box<dyn Future<Output = ()>>>;
 
     fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = ViewState>>>;
 }

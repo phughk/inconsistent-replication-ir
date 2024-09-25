@@ -42,7 +42,11 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
         })
     }
 
-    fn promote_finalized(&self, client: ID, operation: u64) -> Pin<Box<dyn Future<Output = ()>>> {
+    fn promote_finalized_and_run(
+        &self,
+        client: ID,
+        operation: u64,
+    ) -> Pin<Box<dyn Future<Output = ()>>> {
         let records = self.records.clone();
         Box::pin(async move {
             let mut map = records.write().await;

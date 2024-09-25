@@ -47,7 +47,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         })
     }
 
-    fn request_inconsistent(
+    fn propose_inconsistent(
         &self,
         destination: I,
         client_id: I,
@@ -66,7 +66,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
                 .unwrap()
                 .get(&destination)
                 .unwrap()
-                .exec_inconsistent(client_id, sequence, message)
+                .propose_inconsistent(client_id, sequence, message)
                 .await;
             if Self::should_drop(drop_responses, &destination) {
                 return Err(());
@@ -75,7 +75,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         })
     }
 
-    fn request_consistent(
+    fn propose_consistent(
         &self,
         destination: I,
         client_id: I,
@@ -102,6 +102,14 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
+        todo!()
+    }
+
+    fn invoke_view_change(
+        &self,
+        _destination: I,
+        _view: ViewState,
+    ) -> Pin<Box<dyn Future<Output = Result<ViewState, ()>>>> {
         todo!()
     }
 }

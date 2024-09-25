@@ -1,4 +1,5 @@
 use crate::io::IRNetwork;
+use crate::server::ViewState;
 use crate::types::{DecideFunction, IRMessage, NodeID};
 use crate::IRStorage;
 use futures::stream::FuturesUnordered;
@@ -10,6 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
 /// Minimum cluster size of f=1 is 3
 const MINIMUM_CLUSTER_SIZE: usize = 3;
+
+/// This is how many retries will happen in total
+const MAX_ATTEMPTS: u8 = 100;
 
 /// Derive f (number of tolerable failures) from the number of nodes in the cluster
 const fn f(nodes: usize) -> usize {
@@ -56,49 +60,74 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
     /// Make an inconsistent request to the cluster
     /// Inconsistent requests happen in any order
     /// Conflict resolution is done by the client after receiving responses
-    pub async fn invoke_inconsistent(&self, message: MSG) -> Result<(), &'static str> {
+    pub async fn invoke_inconsistent(&self, message: MSG) -> Result<MSG, &'static str> {
         let nodes = self.network.get_members().await;
+        let nodes_len = nodes.len();
 
-        if nodes.len() < MINIMUM_CLUSTER_SIZE {
+        if nodes_len < MINIMUM_CLUSTER_SIZE {
             return Err("Cluster size is too small");
         }
-        // Derive f, assuming cluster size is 2f+1
-        let f = (nodes.len() - 1) / 2;
 
         // Initiate requests
         let mut requests = FuturesUnordered::new();
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         for node in nodes {
-            requests.push(self.network.request_inconsistent(
-                node,
-                self.client_id.clone(),
-                self.sequence.fetch_add(1, Ordering::SeqCst),
-                message.clone(),
-            ));
+            requests.push(self.propose_inconsistent_helper(node, sequence, message.clone()));
         }
         let mut responses = Vec::with_capacity(requests.len());
 
-        // TODO is this correct? Inconsistent operations are just f+1 same results
-        // Try fast quorum of 3f/2+1 with all responses the same
-        // This allows for single round-trip communication
-        let fast_quorum = 3 * f / 2 + 1;
-        for _ in 0..fast_quorum {
+        let mut attempts = 0;
+        while responses.len() < slow_quorum(nodes_len) && attempts < MAX_ATTEMPTS {
             match requests.next().await {
-                Some(response) => responses.push(response),
+                Some((node, Ok(response))) => responses.push((node, response)),
+                Some((node, Err(_e))) => {
+                    // Retry the request
+                    attempts += 1;
+                    requests.push(self.propose_inconsistent_helper(
+                        node,
+                        sequence,
+                        message.clone(),
+                    ));
+                }
                 None => break,
             }
         }
+        if attempts >= MAX_ATTEMPTS {
+            return Err("Too many attempts");
+        }
+
+        // Validate views
+        if let Err(highest) = Self::validate_view(responses.iter().map(|r| &r.1 .1), None) {
+            // Views are invalid and we must now message invalid views to catch up
+            for (node, (_msg, view)) in &responses {
+                if view.view() < highest.view() {
+                    self.network
+                        .invoke_view_change(node.clone(), highest.clone())
+                        .await
+                        .unwrap();
+                }
+            }
+            return Err("Views are invalid");
+        }
+
         if responses.is_empty() {
             return Err("No responses received");
         }
-        let enough_responses = responses.len() >= fast_quorum;
-        let all_same = responses.iter().all(|r| r == &responses[0]);
-        if enough_responses && all_same && responses[0].is_ok() {
-            return Ok(());
+        let enough_responses = responses.len() >= fast_quorum(nodes_len);
+        let expected_msg = &responses[0].1 .0;
+        let all_same = responses.iter().all(|r| {
+            let (_, (msg, _)) = r;
+            msg == expected_msg
+        });
+        if enough_responses && all_same {
+            let (_node, (msg, _view)) = responses.into_iter().next().unwrap();
+            return Ok(msg);
         }
-
-        // We do not have a fast quorum and must continue to a slow quorum
-        // TODO does inconsistent operation have slow quorum even?
-        Err("Slow quorum is unimplemented")
+        println!(
+            "Enough responses = {}, all_same = {}",
+            enough_responses, all_same
+        );
+        Err("Responses didn't match or weren't enough")
     }
 
     /// Make a consistent request to the cluster
@@ -122,7 +151,7 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         let mut requests = FuturesUnordered::new();
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         for node in &nodes {
-            requests.push(self.network.request_consistent(
+            requests.push(self.network.propose_consistent(
                 node.clone(),
                 self.client_id.clone(),
                 sequence,
@@ -189,6 +218,44 @@ impl<NET: IRNetwork<ID, MSG>, STO: IRStorage<ID, MSG>, ID: NodeID, MSG: IRMessag
         }
         Ok(())
     }
+
+    /// Given an iterable of views, and a provided expected view
+    /// Return Ok if all views match (with the expected as value)
+    /// Return Err if they don't match (with latest as value)
+    fn validate_view<'a, I: IntoIterator<Item = &'a ViewState>>(
+        views: I,
+        expected: Option<&'a ViewState>,
+    ) -> Result<&'a ViewState, &'a ViewState> {
+        let mut iter = views.into_iter();
+        let mut highest = expected.or(iter.next()).unwrap();
+        let mut failed = false;
+        while let Some(view) = iter.next() {
+            if view.view() > highest.view() {
+                highest = view;
+                failed = true;
+            } else if view.view() < highest.view() {
+                failed = true;
+            }
+        }
+        match failed {
+            true => Err(highest),
+            false => Ok(highest),
+        }
+    }
+
+    /// This helper is required so that we have a consistently-sized future
+    async fn propose_inconsistent_helper(
+        &self,
+        node: ID,
+        sequence: u64,
+        message: MSG,
+    ) -> (ID, Result<(MSG, ViewState), ()>) {
+        let response = self
+            .network
+            .propose_inconsistent(node.clone(), self.client_id.clone(), sequence, message)
+            .await;
+        (node, response)
+    }
 }
 
 #[cfg(test)]
@@ -241,7 +308,7 @@ mod test {
         let result = client.invoke_inconsistent(&[4, 5, 6]).await;
 
         // then the request is handled
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{:?}", result);
     }
 
     #[tokio::test]
@@ -255,8 +322,8 @@ mod test {
         let client = InconsistentReplicationClient::new(network.clone(), storage, 0);
 
         // when we prevent the request from being sent
-        network.drop_requests_add(1, 1);
-        network.drop_requests_add(2, 1);
+        network.drop_requests_add(1, 2000);
+        network.drop_requests_add(2, 2000);
 
         // and we make the client perform the requests
         let result = client.invoke_inconsistent(&[4, 5, 6]).await;
