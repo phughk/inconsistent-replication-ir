@@ -16,7 +16,7 @@ pub struct InconsistentReplicationServer<
     network: NET,
     storage: Arc<STO>,
     node_id: ID,
-    view: ViewState,
+    view: View<ID>,
     _a: PhantomData<MSG>,
 }
 
@@ -41,20 +41,18 @@ where
 ///
 #[derive(Clone, Eq, PartialEq)]
 #[cfg_attr(any(test, debug_assertions), derive(Debug))]
-pub enum ViewState {
-    Normal { view: u64 },
-    ViewChanging { view: u64 },
-    Recovery { view: u64 },
+pub struct View<ID: NodeID> {
+    pub view: u64,
+    pub members: Vec<ID>,
+    pub state: ViewState,
 }
 
-impl ViewState {
-    pub fn view(&self) -> u64 {
-        match self {
-            ViewState::Normal { view } => *view,
-            ViewState::ViewChanging { view } => *view,
-            ViewState::Recovery { view } => *view,
-        }
-    }
+#[derive(Clone, Eq, PartialEq)]
+#[cfg_attr(any(test, debug_assertions), derive(Debug))]
+pub enum ViewState {
+    Normal,
+    ViewChanging,
+    Recovery,
 }
 
 impl<
@@ -81,8 +79,8 @@ impl<
         client_id: I,
         operation_sequence: u64,
         message: M,
-        highest_observed_view: Option<ViewState>,
-    ) -> Pin<Box<dyn Future<Output = (M, ViewState)>>> {
+        highest_observed_view: Option<View<I>>,
+    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
         let storage = self.storage.clone();
         // TODO maybe read lock?
         let view = self.view.clone();
@@ -100,7 +98,7 @@ impl<
         client_id: I,
         operation_sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = (M, ViewState)>>> {
+    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
         let storage = self.storage.clone();
         let view = self.view.clone();
         Box::pin(async move {
@@ -111,7 +109,13 @@ impl<
         })
     }
 
-    pub fn exec_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, ViewState)>>> {
+    /// Proposes a consistent operation
+    pub fn propose_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+        unimplemented!("Implement me!");
+    }
+
+    /// Finalize and execute a consistent operation
+    pub fn exec_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
         unimplemented!("Implement me!");
     }
 }
@@ -119,7 +123,7 @@ impl<
 #[cfg(test)]
 mod test {
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
-    use crate::server::{InconsistentReplicationServer, ViewState};
+    use crate::server::{InconsistentReplicationServer, View, ViewState};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -128,14 +132,14 @@ mod test {
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
         let storage = MockIRStorage::new();
         storage
-            .set_current_view(ViewState::Normal { view: 3 })
+            .set_current_view(View{view: 3, members: vec![], state: ViewState::Normal})
             .await;
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()))
                 .await;
         network.register_node(Arc::new("1".to_string()), server.clone());
-        assert_eq!(&server.view, &ViewState::Normal { view: 3 });
+        assert_eq!(&server.view, &View{view: 3, members: vec![], state: ViewState::Normal});
     }
 
     #[tokio::test]
@@ -143,12 +147,12 @@ mod test {
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
         let storage = MockIRStorage::new();
         storage
-            .set_current_view(ViewState::Normal { view: 3 })
+            .set_current_view(View{view: 3, members: vec![], state: ViewState::Normal})
             .await;
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()));
-        let new_view = ViewState::Normal { view: 4 };
+        let new_view = View::<Arc<String>>{view: 4, members: vec![], state: ViewState::Normal};
         server.await.propose_inconsistent(
             Arc::new("1".to_string()),
             1,

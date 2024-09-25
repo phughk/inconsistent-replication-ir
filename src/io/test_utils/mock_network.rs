@@ -1,4 +1,4 @@
-use crate::server::ViewState;
+use crate::server::View;
 use crate::types::{IRMessage, NodeID};
 use crate::{IRNetwork, IRStorage, InconsistentReplicationServer};
 use std::collections::BTreeMap;
@@ -53,8 +53,8 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         client_id: I,
         sequence: u64,
         message: M,
-        highest_observed_view: Option<ViewState>,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
+        highest_observed_view: Option<View<I>>,
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
@@ -78,39 +78,39 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
 
     fn propose_consistent(
         &self,
-        destination: I,
-        client_id: I,
-        sequence: u64,
-        message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
+        _destination: I,
+        _client_id: I,
+        _sequence: u64,
+        _message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
         todo!()
     }
 
     fn async_finalize(
         &self,
-        destination: I,
-        client_id: I,
-        sequence: u64,
-        message: M,
+        _destination: I,
+        _client_id: I,
+        _sequence: u64,
+        _message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
         todo!()
     }
 
     fn sync_finalize(
         &self,
-        destination: I,
-        client_id: I,
-        sequence: u64,
-        message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>> {
+        _destination: I,
+        _client_id: I,
+        _sequence: u64,
+        _message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
         todo!()
     }
 
     fn invoke_view_change(
         &self,
         _destination: I,
-        _view: ViewState,
-    ) -> Pin<Box<dyn Future<Output = Result<ViewState, ()>>>> {
+        _view: View<I>,
+    ) -> Pin<Box<dyn Future<Output = Result<View<I>, ()>>>> {
         todo!()
     }
 }

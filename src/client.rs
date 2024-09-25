@@ -1,5 +1,5 @@
 use crate::io::IRNetwork;
-use crate::server::ViewState;
+use crate::server::View;
 use crate::types::{DecideFunction, IRMessage, NodeID};
 use crate::IRStorage;
 use futures::stream::FuturesUnordered;
@@ -93,7 +93,7 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
         if let Err(highest) = Self::validate_view(responses.iter().map(|r| &r.1 .1), None) {
             // Views are invalid and we must now message invalid views to catch up
             for (node, (_msg, view)) in &responses {
-                if view.view() < highest.view() {
+                if view.view < highest.view {
                     self.network
                         .invoke_view_change(node.clone(), highest.clone())
                         .await
@@ -187,18 +187,18 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
     /// Given an iterable of views, and a provided expected view
     /// Return Ok if all views match (with the expected as value)
     /// Return Err if they don't match (with latest as value)
-    fn validate_view<'a, I: IntoIterator<Item = &'a ViewState>>(
+    fn validate_view<'a, I: IntoIterator<Item = &'a View<ID>>>(
         views: I,
-        expected: Option<&'a ViewState>,
-    ) -> Result<&'a ViewState, &'a ViewState> {
+        expected: Option<&'a View<ID>>,
+    ) -> Result<&'a View<ID>, &'a View<ID>> {
         let mut iter = views.into_iter();
         let mut highest = expected.or(iter.next()).unwrap();
         let mut failed = false;
         while let Some(view) = iter.next() {
-            if view.view() > highest.view() {
+            if view.view > highest.view {
                 highest = view;
                 failed = true;
-            } else if view.view() < highest.view() {
+            } else if view.view < highest.view {
                 failed = true;
             }
         }
@@ -213,15 +213,15 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
             ID,
             u64,
             MSG,
-            Option<ViewState>,
-        ) -> Pin<Box<dyn Future<Output = (ID, Result<(MSG, ViewState), &'static str>)>>>,
+            Option<View<ID>>,
+        ) -> Pin<Box<dyn Future<Output = (ID, Result<(MSG, View<ID>), &'static str>)>>>,
     >(
         &self,
         nodes: &[ID],
         sequence: u64,
         message: MSG,
         request: F,
-    ) -> Result<Vec<(ID, (MSG, ViewState))>, &'static str> {
+    ) -> Result<Vec<(ID, (MSG, View<ID>))>, &'static str> {
         let mut requests = FuturesUnordered::new();
         for node in nodes {
             requests.push(request(node.clone(), sequence, message.clone(), None));
@@ -252,8 +252,8 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRStorage<ID, MSG>+'static, ID: NodeI
         node: ID,
         sequence: u64,
         message: MSG,
-        highest_observed_view: Option<ViewState>,
-    ) -> (ID, Result<(MSG, ViewState), ()>) {
+        highest_observed_view: Option<View<ID>>,
+    ) -> (ID, Result<(MSG, View<ID>), ()>) {
         let response = self
             .network
             .propose_inconsistent(

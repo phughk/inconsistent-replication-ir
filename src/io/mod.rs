@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "test"))]
 pub mod test_utils;
 
-use crate::server::ViewState;
+use crate::server::View;
 use crate::types::{IRMessage, NodeID};
 use std::future::Future;
 use std::pin::Pin;
@@ -18,8 +18,8 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-        highest_observed_view: Option<ViewState>,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
+        highest_observed_view: Option<View<I>>,
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>>;
 
     /// Used by clients to make a consistent request to a specific node
     fn propose_consistent(
@@ -28,7 +28,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
@@ -49,14 +49,14 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: u64,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, ViewState), ()>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>>;
 
     /// A client that detects a higher view will notify a node to change view
     fn invoke_view_change(
         &self,
         destination: I,
-        view: ViewState,
-    ) -> Pin<Box<dyn Future<Output = Result<ViewState, ()>>>>;
+        view: View<I>,
+    ) -> Pin<Box<dyn Future<Output = Result<View<I>, ()>>>>;
 }
 
 /// Provides access to a storage log for views and persistence
@@ -78,5 +78,5 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> {
         operation: u64,
     ) -> Pin<Box<dyn Future<Output = ()>>>;
 
-    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = ViewState>>>;
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>>;
 }
