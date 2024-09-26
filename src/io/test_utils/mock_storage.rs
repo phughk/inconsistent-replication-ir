@@ -1,8 +1,8 @@
 use crate::io::{IRClientStorage, StorageShared};
 use crate::server::{View, ViewState};
+use crate::test_utils::mock_record_store::{MockRecordStore, OperationType, State};
 use crate::types::{IRMessage, NodeID};
 use crate::IRStorage;
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,35 +14,9 @@ pub trait MockOperationHandler<M: IRMessage>: Clone + 'static {
     fn reconcile_consistent(&self, previous: M, message: M) -> M;
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
-struct RecordKey<ID: NodeID> {
-    client: ID,
-    operation: u64,
-    view: View<ID>,
-}
-
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
-struct RecordValue<MSG: IRMessage> {
-    state: State,
-    operation_type: OperationType,
-    message: MSG,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum State {
-    Tentative,
-    Finalized,
-}
-
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum OperationType {
-    Consistent,
-    Inconsistent,
-}
-
 #[derive(Clone)]
 pub struct MockIRStorage<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> {
-    records: Arc<TokioRwLock<BTreeMap<RecordKey<ID>, RecordValue<MSG>>>>,
+    records: MockRecordStore<ID, MSG>,
     current_view: Arc<TokioRwLock<View<ID>>>,
     computer_lol: CPU,
 }
@@ -65,33 +39,27 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         operation: u64,
         view: View<ID>,
         message: MSG,
-    ) -> Pin<Box<dyn Future<Output = MSG>>> {
+    ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
         let records = self.records.clone();
+        let computer_lol = self.computer_lol.clone();
         Box::pin(async move {
-            let mut map = records.write().await;
-            let client_clone = client.clone();
-            match map.get(&RecordKey {
-                client,
-                operation,
-                view: view.clone(),
-            }) {
+            let existing = records.find_entry(client.clone(), operation).await;
+            match existing {
                 None => {
-                    map.insert(
-                        RecordKey {
-                            client: client_clone,
-                            operation,
-                            view,
-                        },
-                        RecordValue {
-                            state: State::Tentative,
-                            operation_type: OperationType::Inconsistent,
-                            message: message.clone(),
-                        },
-                    );
-                    message
+                    // This is valid, inconsistent may not have been received
                 }
-                Some(r) => r.message.clone(),
+                Some(state) => {
+                    assert!(state.view == view);
+                    assert!(state.message == message);
+                    assert!(state.operation_type == OperationType::Inconsistent);
+                    assert!(state.state == State::Tentative);
+                }
             }
+            // TODO if finalized, should return finalized value and that it is finalized
+            records
+                .propose_tentative_inconsistent(client, operation, view, message.clone())
+                .await;
+            computer_lol.exec_inconsistent(message)
         })
     }
 
@@ -101,18 +69,27 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         operation: u64,
         view: View<ID>,
         message: MSG,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
         let records = self.records.clone();
+        let computer = self.computer_lol.clone();
         Box::pin(async move {
-            let mut map = records.write().await;
-            if let Some(value) = map.get_mut(&RecordKey {
-                client: client,
-                operation,
-                view: view,
-            }) {
-                value.state = State::Finalized;
-                value.message = message;
+            let existing = records.find_entry(client.clone(), operation).await;
+            match existing {
+                None => {
+                    // This is valid, we may have missed the inconsistent message
+                }
+                Some(state) => {
+                    assert!(state.view == view);
+                    // We do not assert message, as it may be different
+                    assert!(state.operation_type == OperationType::Inconsistent);
+                    // Maybe this is wrong, because we may receive duplicate messages
+                    assert!(state.state != State::Finalized);
+                }
             }
+            records
+                .promote_finalized_inconsistent(client, operation, view, message.clone())
+                .await;
+            let _unused_msg = computer.exec_inconsistent(message);
         })
     }
 
@@ -122,32 +99,25 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         operation: u64,
         view: View<ID>,
         message: MSG,
-    ) -> Pin<Box<dyn Future<Output = MSG>>> {
+    ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
         let records = self.records.clone();
+        let computer = self.computer_lol.clone();
         Box::pin(async move {
-            let mut map = records.write().await;
-            match map.get(&RecordKey {
-                client: client.clone(),
-                operation,
-                view: view.clone(),
-            }) {
+            let existing = records.find_entry(client.clone(), operation).await;
+            match existing {
                 None => {
-                    map.insert(
-                        RecordKey {
-                            client,
-                            operation,
-                            view,
-                        },
-                        RecordValue {
-                            state: State::Tentative,
-                            operation_type: OperationType::Consistent,
-                            message: message.clone(),
-                        },
-                    );
-                    message
+                    // All good here
                 }
-                Some(r) => r.message.clone(),
+                Some(state) => {
+                    assert!(state.view == view);
+                    assert!(state.operation_type == OperationType::Consistent);
+                    assert!(state.state != State::Finalized);
+                }
             }
+            records
+                .propose_tentative_consistent(client, operation, view, message.clone())
+                .await;
+            computer.exec_consistent(message)
         })
     }
 
@@ -157,8 +127,26 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         operation: u64,
         view: View<ID>,
         message: MSG,
-    ) -> Pin<Box<dyn Future<Output = MSG>>> {
-        todo!()
+    ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
+        let records = self.records.clone();
+        let computer = self.computer_lol.clone();
+        Box::pin(async move {
+            let existing = records.find_entry(client.clone(), operation).await;
+            match existing {
+                None => {
+                    // Valid
+                }
+                Some(state) => {
+                    assert!(state.view == view);
+                    assert!(state.operation_type == OperationType::Consistent);
+                    assert!(state.state != State::Finalized)
+                }
+            }
+            let previous = records
+                .promote_finalized_consistent(client, operation, view, message.clone())
+                .await;
+            computer.reconcile_consistent(previous, message)
+        })
     }
 }
 
@@ -170,7 +158,7 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRClientStorage
 impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> MockIRStorage<ID, MSG, CPU> {
     pub fn new(members: Vec<ID>, computer: CPU) -> Self {
         MockIRStorage {
-            records: Arc::new(TokioRwLock::new(BTreeMap::new())),
+            records: MockRecordStore::new(),
             current_view: Arc::new(TokioRwLock::new(View {
                 view: 0,
                 members,
