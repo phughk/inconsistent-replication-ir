@@ -2,6 +2,7 @@ mod client;
 mod io;
 mod server;
 pub mod types;
+pub(crate) mod utils;
 
 pub use client::InconsistentReplicationClient;
 #[cfg(any(test, feature = "test"))]

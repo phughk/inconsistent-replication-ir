@@ -1,6 +1,7 @@
 use crate::io::{IRClientStorage, IRNetwork};
 use crate::server::View;
 use crate::types::{DecideFunction, IRMessage, NodeID};
+use crate::utils::slow_quorum;
 use crate::IRStorage;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -8,8 +9,8 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Cluster size is 2f+1, as per page 4 of the extended paper (3.1.2 IR Guarantees)
@@ -19,21 +20,8 @@ const MINIMUM_CLUSTER_SIZE: usize = 3;
 /// This is how many retries will happen in total
 const MAX_ATTEMPTS: u8 = 100;
 
-/// Derive f (number of tolerable failures) from the number of nodes in the cluster
-const fn f(nodes: usize) -> usize {
-    (nodes - 1) / 2
-}
-
-/// Derive the fast quorum size from the number of nodes in the cluster
-const fn fast_quorum(nodes: usize) -> usize {
-    3 * f(nodes) / 2 + 1
-}
-
-/// Derive the normal quorum size from the number of nodes in the cluster
-const fn slow_quorum(nodes: usize) -> usize {
-    f(nodes) + 1
-}
-
+/// The client used to interact with the IR cluster.
+/// Addresses are provided via the view on the storage interface.
 pub struct InconsistentReplicationClient<
     N: IRNetwork<I, M>,
     S: IRClientStorage<I, M>,
@@ -49,8 +37,18 @@ pub struct InconsistentReplicationClient<
     _a: PhantomData<M>,
 }
 
-impl<NET: IRNetwork<ID, MSG>+'static, STO: IRClientStorage<ID, MSG>+'static, ID: NodeID+'static, MSG: IRMessage+'static>
-    InconsistentReplicationClient<NET, STO, ID, MSG>
+struct ResponseIntermediary<I: NodeID, M: IRMessage> {
+    node: I,
+    message: M,
+    view: View<I>,
+}
+
+impl<
+        NET: IRNetwork<ID, MSG> + 'static,
+        STO: IRClientStorage<ID, MSG> + 'static,
+        ID: NodeID + 'static,
+        MSG: IRMessage + 'static,
+    > InconsistentReplicationClient<NET, STO, ID, MSG>
 {
     pub async fn new(network: NET, storage: STO, client_id: ID) -> Self {
         let view = storage.recover_current_view().await;
@@ -81,18 +79,31 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRClientStorage<ID, MSG>+'static, ID:
         let network = self.network.clone();
         let client_id = self.client_id.clone();
         let mut responses = self
-            .request_until_quorum(&nodes, sequence, message, move |node, sequence, message, _| {
-                Box::pin({
-                    let network = network.clone();
-                    let client_id = client_id.clone();
-                    async move {
-                        let r = network.propose_inconsistent(node.clone(), client_id, sequence, message, None).await;
-                        (node, r.map_err(|_| "Failed to propose inconsistent"))
-                    }
-                })
-            })
+            .request_until_quorum(
+                &nodes,
+                sequence,
+                message,
+                move |node, sequence, message, _| {
+                    Box::pin({
+                        let network = network.clone();
+                        let client_id = client_id.clone();
+                        async move {
+                            let r = network
+                                .propose_inconsistent(
+                                    node.clone(),
+                                    client_id,
+                                    sequence,
+                                    message,
+                                    None,
+                                )
+                                .await;
+                            (node, r.map_err(|_| "Failed to propose inconsistent"))
+                        }
+                    })
+                },
+            )
             .await?;
-        assert!(responses.len() >= slow_quorum(nodes_len));
+        assert!(responses.len() >= slow_quorum(nodes_len).unwrap());
 
         // Validate views
         if let Err(highest) = Self::validate_view(responses.iter().map(|r| &r.1 .1), None) {
@@ -159,7 +170,7 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRClientStorage<ID, MSG>+'static, ID:
                 })
             })
             .await?;
-        assert!(responses.len() >= slow_quorum(nodes.len()));
+        assert!(responses.len() >= slow_quorum(nodes.len()).unwrap());
 
         let all_same = responses.iter().all(|r| r == &responses[0]);
         if all_same {
@@ -247,7 +258,7 @@ impl<NET: IRNetwork<ID, MSG>+'static, STO: IRClientStorage<ID, MSG>+'static, ID:
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut attempts = 0;
-        while responses.len() < slow_quorum(nodes.len()) && attempts < MAX_ATTEMPTS {
+        while responses.len() < slow_quorum(nodes.len()).unwrap() && attempts < MAX_ATTEMPTS {
             match requests.next().await {
                 Some((node, Ok(response))) => responses.push((node, response)),
                 Some((node, Err(_e))) => {
@@ -292,35 +303,6 @@ mod test {
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
     use crate::types::{IRMessage, NodeID};
     use crate::InconsistentReplicationServer;
-
-    #[test]
-    fn test_f() {
-        assert_eq!(super::f(1), 0);
-        assert_eq!(super::f(2), 0);
-        assert_eq!(super::f(3), 1);
-        assert_eq!(super::f(4), 1);
-        assert_eq!(super::f(5), 2);
-        assert_eq!(super::f(6), 2);
-        assert_eq!(super::f(7), 3);
-    }
-
-    #[test]
-    fn test_fast_quorum() {
-        assert_eq!(super::fast_quorum(3), 2);
-        assert_eq!(super::fast_quorum(4), 2);
-        assert_eq!(super::fast_quorum(5), 4);
-        assert_eq!(super::fast_quorum(6), 4);
-        assert_eq!(super::fast_quorum(7), 5);
-    }
-
-    #[test]
-    fn test_slow_quorum() {
-        assert_eq!(super::slow_quorum(3), 2);
-        assert_eq!(super::slow_quorum(4), 2);
-        assert_eq!(super::slow_quorum(5), 3);
-        assert_eq!(super::slow_quorum(6), 3);
-        assert_eq!(super::slow_quorum(7), 4);
-    }
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
