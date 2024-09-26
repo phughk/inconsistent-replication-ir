@@ -40,7 +40,7 @@ where
 }
 
 ///
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, debug_assertions), derive(Debug))]
 pub struct View<ID: NodeID> {
     pub view: u64,
@@ -48,7 +48,7 @@ pub struct View<ID: NodeID> {
     pub state: ViewState,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, debug_assertions), derive(Debug))]
 pub enum ViewState {
     Normal,
@@ -87,7 +87,7 @@ impl<
         let view = self.view.clone();
         Box::pin(async move {
             let view = view.read().await.clone();
-            assert_eq!(view.state,ViewState::Normal);
+            assert_eq!(view.state, ViewState::Normal);
             let m = storage
                 .record_tentative(client_id, operation_sequence, message)
                 .await;
@@ -106,7 +106,7 @@ impl<
         let view = self.view.clone();
         Box::pin(async move {
             let view = view.read().await.clone();
-            assert_eq!(view.state,ViewState::Normal);
+            assert_eq!(view.state, ViewState::Normal);
             let _ = storage
                 .promote_finalized_and_run(client_id, operation_sequence)
                 .await;
@@ -141,10 +141,18 @@ mod test {
     pub async fn recovers_view_from_storage() {
         // when
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
-        let members = vec![Arc::new("1".to_string()),Arc::new("2".to_string()),Arc::new("3".to_string())];
+        let members = vec![
+            Arc::new("1".to_string()),
+            Arc::new("2".to_string()),
+            Arc::new("3".to_string()),
+        ];
         let storage = MockIRStorage::new(members.clone());
         storage
-            .set_current_view(View{view: 3, members: members.clone(), state: ViewState::Normal})
+            .set_current_view(View {
+                view: 3,
+                members: members.clone(),
+                state: ViewState::Normal,
+            })
             .await;
 
         let server =
@@ -152,21 +160,40 @@ mod test {
                 .await;
         network.register_node(Arc::new("1".to_string()), server.clone());
         let lock = server.view.read().await;
-        assert_eq!(&*lock, &View{view: 3, members: members.clone(), state: ViewState::Normal});
+        assert_eq!(
+            &*lock,
+            &View {
+                view: 3,
+                members: members.clone(),
+                state: ViewState::Normal
+            }
+        );
     }
 
     #[tokio::test]
     pub async fn changes_view_on_higher_value_propose_inconsistent() {
         let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
-        let members = vec![Arc::new("1".to_string()),Arc::new("2".to_string()),Arc::new("3".to_string())];
+        let members = vec![
+            Arc::new("1".to_string()),
+            Arc::new("2".to_string()),
+            Arc::new("3".to_string()),
+        ];
         let storage = MockIRStorage::new(members.clone());
         storage
-            .set_current_view(View{view: 3, members: members.clone(), state: ViewState::Normal})
+            .set_current_view(View {
+                view: 3,
+                members: members.clone(),
+                state: ViewState::Normal,
+            })
             .await;
 
         let server =
             InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()));
-        let new_view = View::<Arc<String>>{view: 4, members: vec![], state: ViewState::Normal};
+        let new_view = View::<Arc<String>> {
+            view: 4,
+            members: vec![],
+            state: ViewState::Normal,
+        };
         server.await.propose_inconsistent(
             Arc::new("1".to_string()),
             1,

@@ -1,6 +1,6 @@
 use crate::server::View;
 use crate::types::{IRMessage, NodeID};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
 /// Derive f (number of tolerable failures) from the number of nodes in the cluster
@@ -29,15 +29,15 @@ pub struct QuorumVote<'a, ID: NodeID, MSG: IRMessage> {
 }
 
 #[derive(Eq, PartialEq)]
-struct Quorum<ID: NodeID, MSG: IRMessage> {
+struct Quorum<'a, ID: NodeID, MSG: IRMessage> {
     count: usize,
-    message: MSG,
-    nodes_with: Vec<ID>,
-    nodes_without: Vec<ID>,
-    view: View<ID>,
+    message: &'a MSG,
+    nodes_with: Vec<&'a ID>,
+    nodes_without: Vec<&'a ID>,
+    view: &'a View<ID>,
 }
 
-impl<ID: NodeID, MSG: IRMessage> Debug for Quorum<ID, MSG>
+impl<'a, ID: NodeID, MSG: IRMessage> Debug for Quorum<'a, ID, MSG>
 where
     ID: Debug,
     MSG: Debug,
@@ -66,15 +66,50 @@ pub fn find_quorum<
 >(
     iterable: ITER,
     quorum_type: QuorumType,
-) -> Result<Quorum<ID, MSG>, ()> {
-    let votes: BTreeMap<View<ID>, BTreeMap<MSG, Vec<ID>>> = BTreeMap::new();
-    let _ = votes;
-    let mut total_size = 0;
+) -> Result<Quorum<'a, ID, MSG>, ()> {
+    // TODO duplicate votes from same node
+    let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, Vec<&ID>>> = BTreeMap::new();
+    let mut highest_view: Option<&'a View<ID>> = None;
+    let mut all_nodes = BTreeSet::new();
     for item in iterable {
-        total_size += 1;
-        let _ = item;
+        let view_entry = votes.entry(item.view).or_insert(BTreeMap::new());
+        if highest_view.is_none() || item.view.view > highest_view.unwrap().view {
+            highest_view = Some(item.view);
+        }
+        let message_entry = view_entry.entry(item.message).or_insert(vec![]);
+        all_nodes.insert(item.node);
+        message_entry.push(item.node);
     }
-    Err(())
+    let mut opposing_nodes = all_nodes;
+    // Find the highest view
+    let highest_view = highest_view.ok_or(())?;
+    // Find the highest number of votes
+    let (highest_vote_message, highest_vote_nodes) = votes
+        .get(highest_view)
+        .ok_or(())?
+        .iter()
+        .max_by(|a, b| a.1.len().cmp(&b.1.len()))
+        .ok_or(())?;
+    // Remove the highest vote nodes from the opposing nodes
+    for node in highest_vote_nodes {
+        opposing_nodes.remove(node);
+    }
+    // Check quorum against view
+    let quorum_size = match quorum_type {
+        QuorumType::FastQuorum => fast_quorum(highest_view.members.len())?,
+        QuorumType::NormalQuorum => slow_quorum(highest_view.members.len())?,
+    };
+    if highest_vote_nodes.len() >= quorum_size {
+        Ok(Quorum {
+            count: highest_vote_nodes.len(),
+            message: highest_vote_message,
+            nodes_with: highest_vote_nodes.clone(),
+            nodes_without: opposing_nodes.into_iter().collect(),
+            view: highest_view,
+        })
+    } else {
+        Err(())
+    }
 }
 
 pub enum QuorumType {
@@ -138,9 +173,10 @@ mod test {
     fn test_quorum() {
         struct TestCase<'a> {
             name: &'a str,
+            line_number: u32,
             votes: Vec<QuorumVote<'a, String, String>>,
             quorum_type: QuorumType,
-            expected: Result<Quorum<String, String>, ()>,
+            expected: Result<Quorum<'a, String, String>, ()>,
         }
 
         fn view(num: u64, members: &[&'static str], state: ViewState) -> super::View<String> {
@@ -170,6 +206,7 @@ mod test {
             // TODO 4 nodes (f=1) and 2=A, 2=B
             TestCase {
                 name: "Quorum is achieved if all votes are the same",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -190,14 +227,15 @@ mod test {
                 quorum_type: QuorumType::FastQuorum,
                 expected: Ok(Quorum {
                     count: 3,
-                    message: msg_a.clone(),
-                    nodes_with: vec![one.clone(), two.clone(), three.clone()],
+                    message: &msg_a,
+                    nodes_with: vec![&one, &two, &three],
                     nodes_without: vec![],
-                    view: view_3_1_normal.clone(),
+                    view: &view_3_1_normal,
                 }),
             },
             TestCase {
                 name: "Quorum is achieved if one value is different",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -218,14 +256,15 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
-                    message: msg_a.clone(),
-                    nodes_with: vec![two.clone(), three.clone()],
-                    nodes_without: vec![one.clone()],
-                    view: view_3_1_normal.clone(),
+                    message: &msg_a,
+                    nodes_with: vec![&two, &three],
+                    nodes_without: vec![&one],
+                    view: &view_3_1_normal,
                 }),
             },
             TestCase {
                 name: "Quorum is achieved if one value is missing",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -241,14 +280,15 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
-                    message: "A".to_string(),
-                    nodes_with: vec![one.clone(), two.clone()],
-                    nodes_without: vec![three.clone()],
-                    view: view_3_1_normal.clone(),
+                    message: &msg_a,
+                    nodes_with: vec![&one, &two],
+                    nodes_without: vec![&three],
+                    view: &view_3_1_normal,
                 }),
             },
             TestCase {
                 name: "Quorum is not achieved is one value has a larger view",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -271,6 +311,7 @@ mod test {
             },
             TestCase {
                 name: "Quorum is achieved if one value has a smaller view",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -291,14 +332,15 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
-                    message: "A".to_string(),
-                    nodes_with: vec!["1".to_string(), "2".to_string()],
-                    nodes_without: vec!["3".to_string()],
-                    view: view(2, &["1", "2", "3"], ViewState::Normal),
+                    message: &msg_a,
+                    nodes_with: vec![&one, &two],
+                    nodes_without: vec![&three],
+                    view: &view_3_2_normal,
                 }),
             },
             TestCase {
                 name: "Quorum is not achieved if equal split votes in 4 node cluster",
+                line_number: line!(),
                 votes: vec![
                     QuorumVote {
                         node: &one,
@@ -328,7 +370,11 @@ mod test {
 
         for case in cases {
             let result = super::find_quorum(case.votes.iter(), case.quorum_type);
-            assert_eq!(result, case.expected, "{}", case.name);
+            assert_eq!(
+                result, case.expected,
+                "{} - {}",
+                case.line_number, case.name
+            );
         }
     }
 }
