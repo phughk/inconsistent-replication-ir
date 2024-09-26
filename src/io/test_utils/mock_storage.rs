@@ -1,3 +1,4 @@
+use crate::io::{IRClientStorage, StorageShared};
 use crate::server::{View, ViewState};
 use crate::types::{IRMessage, NodeID};
 use crate::IRStorage;
@@ -6,12 +7,18 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::io::{IRClientStorage, StorageShared};
+
+pub trait MockOperationHandler<M: IRMessage>: Clone + 'static {
+    fn exec_inconsistent(&self, message: M) -> M;
+    fn exec_consistent(&self, message: M) -> M;
+    fn reconcile_consistent(&self, previous: M, message: M) -> M;
+}
 
 #[derive(Clone)]
-pub struct MockIRStorage<ID: NodeID + 'static, MSG: IRMessage + 'static> {
+pub struct MockIRStorage<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> {
     records: Arc<RwLock<BTreeMap<(ID, u64), (State, MSG)>>>,
     current_view: Arc<RwLock<View<ID>>>,
+    computer_lol: CPU,
 }
 
 enum State {
@@ -19,15 +26,19 @@ enum State {
     Finalized,
 }
 
-impl<ID: NodeID + 'static, MSG: IRMessage + 'static> StorageShared<ID> for MockIRStorage<ID, MSG> {
-    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output =View<ID>>>> {
+impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> StorageShared<ID>
+    for MockIRStorage<ID, MSG, CPU>
+{
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>> {
         let view = self.current_view.clone();
         Box::pin(async move { view.read().await.clone() })
     }
 }
 
-impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for MockIRStorage<ID, MSG> {
-    fn record_tentative(
+impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, MSG>
+    for MockIRStorage<ID, MSG, CPU>
+{
+    fn record_tentative_inconsistent(
         &self,
         client: ID,
         operation: u64,
@@ -50,7 +61,7 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
         })
     }
 
-    fn promote_finalized_and_run(
+    fn promote_finalized_and_exec_inconsistent(
         &self,
         client: ID,
         operation: u64,
@@ -63,17 +74,41 @@ impl<ID: NodeID + 'static, MSG: IRMessage + 'static> IRStorage<ID, MSG> for Mock
             }
         })
     }
+
+    fn record_tentative_and_exec_consistent(
+        &self,
+        client: ID,
+        operation: u64,
+        message: MSG,
+    ) -> Pin<Box<dyn Future<Output = MSG>>> {
+        todo!()
+    }
+
+    fn promote_finalized_and_reconcile_consistent(
+        &self,
+        client: ID,
+        operation: u64,
+        message: MSG,
+    ) -> Pin<Box<dyn Future<Output = MSG>>> {
+        todo!()
+    }
 }
 
-impl <ID: NodeID, MSG: IRMessage> IRClientStorage<ID, MSG> for MockIRStorage<ID, MSG> {
-
+impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRClientStorage<ID, MSG>
+    for MockIRStorage<ID, MSG, CPU>
+{
 }
 
-impl<ID: NodeID + 'static, MSG: IRMessage + 'static> MockIRStorage<ID, MSG> {
-    pub fn new(members: Vec<ID>) -> Self {
+impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> MockIRStorage<ID, MSG, CPU> {
+    pub fn new(members: Vec<ID>, computer: CPU) -> Self {
         MockIRStorage {
             records: Arc::new(RwLock::new(BTreeMap::new())),
-            current_view: Arc::new(RwLock::new(View{ view: 0, members, state: ViewState::Normal})),
+            current_view: Arc::new(RwLock::new(View {
+                view: 0,
+                members,
+                state: ViewState::Normal,
+            })),
+            computer_lol: computer,
         }
     }
 

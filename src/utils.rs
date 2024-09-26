@@ -255,8 +255,8 @@ mod test {
             expected: Result<Quorum<'a, String, String>, Option<NoQuorum<'a, String, String>>>,
         }
 
-        fn view(num: u64, members: &[&'static str], state: ViewState) -> super::View<String> {
-            super::View {
+        fn view(num: u64, members: &[&'static str], state: ViewState) -> View<String> {
+            View {
                 view: num,
                 members: members.iter().map(|s| s.to_string()).collect(),
                 state,

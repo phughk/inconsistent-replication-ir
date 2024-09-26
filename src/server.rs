@@ -80,23 +80,24 @@ impl<
         client_id: I,
         operation_sequence: u64,
         message: M,
-        highest_observed_view: Option<View<I>>,
+        // TODO
+        _highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
         let storage = self.storage.clone();
-        // TODO maybe read lock?
         let view = self.view.clone();
         Box::pin(async move {
-            let view = view.read().await.clone();
+            let view_lock = view.read().await;
+            let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let m = storage
-                .record_tentative(client_id, operation_sequence, message)
+                .record_tentative_inconsistent(client_id, operation_sequence, message)
                 .await;
             (m, view)
         })
     }
 
     /// Invoked on finalize message
-    pub fn exec_inconsistent(
+    pub fn finalize_inconsistent(
         &self,
         client_id: I,
         operation_sequence: u64,
@@ -105,23 +106,54 @@ impl<
         let storage = self.storage.clone();
         let view = self.view.clone();
         Box::pin(async move {
-            let view = view.read().await.clone();
+            let view_lock = view.read().await;
+            let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let _ = storage
-                .promote_finalized_and_run(client_id, operation_sequence)
+                .promote_finalized_and_exec_inconsistent(client_id, operation_sequence)
                 .await;
             (message, view)
         })
     }
 
     /// Proposes a consistent operation
-    pub fn propose_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
-        unimplemented!("Implement me!");
+    pub fn propose_consistent(
+        &self,
+        client_id: I,
+        operation_sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+        let view = self.view.clone();
+        let storage = self.storage.clone();
+        Box::pin(async move {
+            let view_lock = view.read().await;
+            let view = view_lock.clone();
+            assert_eq!(view.state, ViewState::Normal);
+            let m = storage
+                .record_tentative_and_exec_consistent(client_id, operation_sequence, message)
+                .await;
+            (m, view)
+        })
     }
 
     /// Finalize and execute a consistent operation
-    pub fn exec_consistent(&self, _message: M) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
-        unimplemented!("Implement me!");
+    pub fn finalize_consistent(
+        &self,
+        client_id: I,
+        operation_sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+        let view = self.view.clone();
+        let storage = self.storage.clone();
+        Box::pin(async move {
+            let view_lock = view.read().await;
+            let view = view_lock.clone();
+            assert_eq!(view.state, ViewState::Normal);
+            let m = storage
+                .promote_finalized_and_reconcile_consistent(client_id, operation_sequence, message)
+                .await;
+            (m, view)
+        })
     }
 
     async fn do_view_change(&self, new_view: View<I>) {
@@ -135,18 +167,19 @@ impl<
 mod test {
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
     use crate::server::{InconsistentReplicationServer, View, ViewState};
+    use crate::test_utils::mock_computers::NoopComputer;
     use std::sync::Arc;
 
     #[tokio::test]
     pub async fn recovers_view_from_storage() {
         // when
-        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
+        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _, _>>::new();
         let members = vec![
             Arc::new("1".to_string()),
             Arc::new("2".to_string()),
             Arc::new("3".to_string()),
         ];
-        let storage = MockIRStorage::new(members.clone());
+        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
         storage
             .set_current_view(View {
                 view: 3,
@@ -172,13 +205,17 @@ mod test {
 
     #[tokio::test]
     pub async fn changes_view_on_higher_value_propose_inconsistent() {
-        let network = MockIRNetwork::<Arc<String>, Arc<String>, MockIRStorage<_, _>>::new();
+        let network = MockIRNetwork::<
+            Arc<String>,
+            Arc<String>,
+            MockIRStorage<_, _, NoopComputer<Arc<String>>>,
+        >::new();
         let members = vec![
             Arc::new("1".to_string()),
             Arc::new("2".to_string()),
             Arc::new("3".to_string()),
         ];
-        let storage = MockIRStorage::new(members.clone());
+        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
         storage
             .set_current_view(View {
                 view: 3,

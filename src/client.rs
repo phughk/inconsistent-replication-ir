@@ -113,7 +113,7 @@ impl<
             .map_err(|_| "Quorum not found")?;
         for node_id in quorum.view.members.iter().cloned() {
             self.network
-                .async_finalize(
+                .async_finalize_inconsistent(
                     node_id,
                     self.client_id.clone(),
                     sequence,
@@ -178,7 +178,7 @@ impl<
                 // We can do async finalize
                 for node_id in quorum.view.members.iter().cloned() {
                     self.network
-                        .async_finalize(
+                        .async_finalize_consistent(
                             node_id,
                             self.client_id.clone(),
                             sequence,
@@ -189,8 +189,40 @@ impl<
                 }
             }
             QuorumType::NormalQuorum => {
+                // TODO This is actually incorrect, we should always invoke decide if FastQuorum
+                // cannot be obtained
 
-                // TODO wait for f+1 confirm responses
+                let responses = self
+                    .request_until_number_of_responses(
+                        &quorum.view.members,
+                        sequence,
+                        quorum.message.clone(),
+                        |node, sequence, message, view| {
+                            Box::pin({
+                                let network = network.clone();
+                                let client_id = client_id.clone();
+                                async move {
+                                    let res = network
+                                        .sync_finalize_consistent(
+                                            node.clone(),
+                                            client_id,
+                                            sequence,
+                                            message,
+                                        )
+                                        .await;
+                                    (node, res.map_err(|_| "Failed to sync finalize consistent"))
+                                }
+                            })
+                        },
+                    )
+                    .await?;
+                let _quorum =
+                    find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
+                        node: node_id,
+                        message: msg,
+                        view,
+                    }))
+                    .map_err(|_| "Unable to get enough confirm messages for consistent finalize")?;
             }
         }
 
@@ -297,15 +329,16 @@ impl<
 mod test {
     use crate::client::InconsistentReplicationClient;
     use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
+    use crate::test_utils::mock_computers::NoopComputer;
     use crate::types::{IRMessage, NodeID};
     use crate::InconsistentReplicationServer;
 
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
         // given a cluster
-        let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
+        let network = MockIRNetwork::<_, _, MockIRStorage<_, _, _>>::new();
         let members = vec![1, 2, 3];
-        let storage = MockIRStorage::new(members.clone());
+        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
         mock_cluster(&network, members).await;
 
         // and a client
@@ -321,9 +354,9 @@ mod test {
     #[tokio::test]
     async fn client_fails_inconsistent_request_no_quorum() {
         // given a cluster
-        let network = MockIRNetwork::<_, _, MockIRStorage<_, _>>::new();
+        let network = MockIRNetwork::<_, _, MockIRStorage<_, _, _>>::new();
         let members = vec![1, 2, 3];
-        let storage = MockIRStorage::new(members.clone());
+        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
         mock_cluster(&network, members).await;
 
         // and a client
@@ -341,7 +374,7 @@ mod test {
     }
 
     async fn mock_cluster<ID: NodeID, MSG: IRMessage>(
-        network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG>>,
+        network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG, NoopComputer<MSG>>>,
         nodes: Vec<ID>,
     ) {
         for node_id in &nodes {
@@ -349,7 +382,7 @@ mod test {
                 node_id.clone(),
                 InconsistentReplicationServer::new(
                     network.clone(),
-                    MockIRStorage::new(nodes.clone()),
+                    MockIRStorage::new(nodes.clone(), NoopComputer::new()),
                     node_id.clone(),
                 )
                 .await,

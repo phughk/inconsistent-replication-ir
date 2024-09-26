@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock as StdRwLock};
+use tokio::sync::RwLock as TokioRwLock;
 
-type DropPacketCounter<ID> = Arc<RwLock<BTreeMap<ID, AtomicUsize>>>;
+type DropPacketCounter<ID> = Arc<StdRwLock<BTreeMap<ID, AtomicUsize>>>;
 
 pub struct MockIRNetwork<
     ID: NodeID + 'static,
@@ -15,7 +16,7 @@ pub struct MockIRNetwork<
     STO: IRStorage<ID, MSG> + 'static,
 > {
     nodes: Arc<
-        RwLock<
+        TokioRwLock<
             BTreeMap<ID, InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>>,
         >,
     >,
@@ -39,7 +40,6 @@ where
 }
 
 impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNetwork<I, M, STO> {
-
     fn propose_inconsistent(
         &self,
         destination: I,
@@ -69,27 +69,64 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         })
     }
 
+    fn async_finalize_inconsistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+        let nodes = self.nodes.clone();
+        Box::pin(async move {
+            let read_lock = nodes.read().await;
+            let (_msg, _view) = read_lock
+                .get(&destination)
+                .ok_or(())?
+                .finalize_inconsistent(client_id, sequence, message)
+                .await;
+            Ok(())
+        })
+    }
+
+    fn async_finalize_consistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+        let nodes = self.nodes.clone();
+        Box::pin(async move {
+            let read_lock = nodes.read().await;
+            let (_msg, _view) = read_lock
+                .get(&destination)
+                .ok_or(())?
+                .finalize_consistent(client_id, sequence, message)
+                .await;
+            Ok(())
+        })
+    }
+
     fn propose_consistent(
         &self,
-        _destination: I,
-        _client_id: I,
-        _sequence: u64,
-        _message: M,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
-        todo!()
+        let nodes = self.nodes.clone();
+        Box::pin(async move {
+            let read_lock = nodes.read().await;
+            let (msg, view) = read_lock
+                .get(&destination)
+                .ok_or(())?
+                .propose_consistent(client_id, sequence, message)
+                .await;
+            Ok((msg, view))
+        })
     }
 
-    fn async_finalize(
-        &self,
-        _destination: I,
-        _client_id: I,
-        _sequence: u64,
-        _message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
-        todo!()
-    }
-
-    fn sync_finalize(
+    fn sync_finalize_consistent(
         &self,
         _destination: I,
         _client_id: I,
@@ -111,9 +148,9 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
 impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG, STO> {
     pub fn new() -> Self {
         MockIRNetwork {
-            nodes: Arc::new(RwLock::new(BTreeMap::new())),
-            drop_requests: Arc::new(RwLock::new(BTreeMap::new())),
-            drop_responses: Arc::new(RwLock::new(BTreeMap::new())),
+            nodes: Arc::new(TokioRwLock::new(BTreeMap::new())),
+            drop_requests: Arc::new(StdRwLock::new(BTreeMap::new())),
+            drop_responses: Arc::new(StdRwLock::new(BTreeMap::new())),
         }
     }
 

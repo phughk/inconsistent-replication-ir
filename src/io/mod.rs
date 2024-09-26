@@ -8,7 +8,6 @@ use std::pin::Pin;
 
 /// Tracks membership, ID to IP address mapping, and messaging
 pub trait IRNetwork<I: NodeID, M: IRMessage> {
-
     /// Used by clients to make an inconsistent request to a specific node
     fn propose_inconsistent(
         &self,
@@ -31,7 +30,23 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
     /// together with another message
-    fn async_finalize(
+    fn async_finalize_inconsistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+
+    /// Send a finalize message to a node
+    /// This does not need to be immediate, for example it can be buffered and sent
+    /// together with another message
+    ///
+    /// Another word of note is that the implementation does not need to be different
+    /// from @async_finalize_inconsistent .
+    /// We have this distinction because in the tests we cannot differentiate (without storage)
+    /// what type of request it was.
+    fn async_finalize_consistent(
         &self,
         destination: I,
         client_id: I,
@@ -41,7 +56,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
 
     /// Send a finalize message to a node
     /// This *DOES* need to be immediate, though can be batched.
-    fn sync_finalize(
+    fn sync_finalize_consistent(
         &self,
         destination: I,
         client_id: I,
@@ -63,11 +78,11 @@ pub trait StorageShared<ID: NodeID> {
 }
 
 /// Provides access to a storage log for views and persistence
-pub trait IRStorage<ID: NodeID, MSG: IRMessage> : StorageShared<ID> {
+pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
     /// Record a message as tentative for a client and operation number
     /// The message must be recorded as tentative even if the operation is rejected
     /// This is to resolve quorums
-    fn record_tentative(
+    fn record_tentative_inconsistent(
         &self,
         client: ID,
         operation: u64,
@@ -75,14 +90,28 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage> : StorageShared<ID> {
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 
     /// Promote a tentative operation to finalized and execute it
-    fn promote_finalized_and_run(
+    fn promote_finalized_and_exec_inconsistent(
         &self,
         client: ID,
         operation: u64,
     ) -> Pin<Box<dyn Future<Output = ()>>>;
 
+    /// Consistent operations are executed when they are proposed
+    fn record_tentative_and_exec_consistent(
+        &self,
+        client: ID,
+        operation: u64,
+        message: MSG,
+    ) -> Pin<Box<dyn Future<Output = MSG>>>;
+
+    /// Consistent operations may have their result changed and must be reconciled
+    fn promote_finalized_and_reconcile_consistent(
+        &self,
+        client: ID,
+        operation: u64,
+        message: MSG,
+    ) -> Pin<Box<dyn Future<Output = MSG>>>;
 }
 
 /// Provides access to persistence for the client
-pub trait IRClientStorage<ID: NodeID, MSG: IRMessage> : StorageShared<ID> {
-}
+pub trait IRClientStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {}
