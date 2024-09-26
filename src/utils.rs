@@ -67,10 +67,11 @@ pub fn find_quorum<
     iterable: ITER,
     quorum_type: QuorumType,
 ) -> Result<Quorum<'a, ID, MSG>, ()> {
-    // TODO duplicate votes from same node
     let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, Vec<&ID>>> = BTreeMap::new();
     let mut highest_view: Option<&'a View<ID>> = None;
+    // TODO duplicate votes from same node - this can be a map, and the value gets replaced with the most appropriate vote (view number)
     let mut all_nodes = BTreeSet::new();
+    // Tally up all the votes
     for item in iterable {
         let view_entry = votes.entry(item.view).or_insert(BTreeMap::new());
         if highest_view.is_none() || item.view.view > highest_view.unwrap().view {
@@ -90,6 +91,10 @@ pub fn find_quorum<
         .iter()
         .max_by(|a, b| a.1.len().cmp(&b.1.len()))
         .ok_or(())?;
+    // Add all nodes from the view
+    for node in highest_view.members.iter() {
+        opposing_nodes.insert(node);
+    }
     // Remove the highest vote nodes from the opposing nodes
     for node in highest_vote_nodes {
         opposing_nodes.remove(node);
@@ -354,7 +359,7 @@ mod test {
                     },
                     QuorumVote {
                         node: &three,
-                        message: &msg_a,
+                        message: &msg_b,
                         view: &view_4_1_normal,
                     },
                     QuorumVote {
