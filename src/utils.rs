@@ -67,7 +67,7 @@ pub fn find_quorum<
     iterable: ITER,
     quorum_type: QuorumType,
 ) -> Result<Quorum<'a, ID, MSG>, ()> {
-    let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, Vec<&ID>>> = BTreeMap::new();
+    let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, BTreeSet<&ID>>> = BTreeMap::new();
     let mut highest_view: Option<&'a View<ID>> = None;
     // TODO duplicate votes from same node - this can be a map, and the value gets replaced with the most appropriate vote (view number)
     let mut all_nodes = BTreeSet::new();
@@ -77,26 +77,40 @@ pub fn find_quorum<
         if highest_view.is_none() || item.view.view > highest_view.unwrap().view {
             highest_view = Some(item.view);
         }
-        let message_entry = view_entry.entry(item.message).or_insert(vec![]);
-        all_nodes.insert(item.node);
-        message_entry.push(item.node);
+        let message_entry = view_entry.entry(item.message).or_insert(BTreeSet::new());
+        if !all_nodes.contains(item.node) || Some(item.view) == highest_view {
+            // We don't want a node voting twice, but we also don't want to fail check
+            // So we only count the second vote if it is potentially valid
+            all_nodes.insert(item.node);
+            message_entry.insert(item.node);
+        }
     }
     let mut opposing_nodes = all_nodes;
     // Find the highest view
     let highest_view = highest_view.ok_or(())?;
     // Find the highest number of votes
-    let (highest_vote_message, highest_vote_nodes) = votes
+    let (quorum_vote_message, quorum_vote_nodes) = votes
         .get(highest_view)
         .ok_or(())?
         .iter()
         .max_by(|a, b| a.1.len().cmp(&b.1.len()))
         .ok_or(())?;
+    // Avoid pathological situations where there are multiple quorums
+    let how_many_quorums = votes
+        .get(highest_view)
+        .ok_or(())?
+        .iter()
+        .filter(|(_msg, votes)| votes.len() >= quorum_vote_nodes.len())
+        .count();
+    if how_many_quorums > 1 {
+        return Err(());
+    }
     // Add all nodes from the view
     for node in highest_view.members.iter() {
         opposing_nodes.insert(node);
     }
-    // Remove the highest vote nodes from the opposing nodes
-    for node in highest_vote_nodes {
+    // Remove the quorum vote nodes from the opposing nodes
+    for node in quorum_vote_nodes {
         opposing_nodes.remove(node);
     }
     // Check quorum against view
@@ -104,11 +118,11 @@ pub fn find_quorum<
         QuorumType::FastQuorum => fast_quorum(highest_view.members.len())?,
         QuorumType::NormalQuorum => slow_quorum(highest_view.members.len())?,
     };
-    if highest_vote_nodes.len() >= quorum_size {
+    if quorum_vote_nodes.len() >= quorum_size {
         Ok(Quorum {
-            count: highest_vote_nodes.len(),
-            message: highest_vote_message,
-            nodes_with: highest_vote_nodes.clone(),
+            count: quorum_vote_nodes.len(),
+            message: quorum_vote_message,
+            nodes_with: quorum_vote_nodes.into_iter().map(|a| *a).collect(),
             nodes_without: opposing_nodes.into_iter().collect(),
             view: highest_view,
         })
@@ -229,7 +243,7 @@ mod test {
                         view: &view_3_1_normal,
                     },
                 ],
-                quorum_type: QuorumType::FastQuorum,
+                quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 3,
                     message: &msg_a,
@@ -366,6 +380,52 @@ mod test {
                         node: &four,
                         message: &msg_b,
                         view: &view_4_1_normal,
+                    },
+                ],
+                quorum_type: QuorumType::NormalQuorum,
+                expected: Err(()),
+            },
+            TestCase {
+                name: "Double votes do not count",
+                line_number: line!(),
+                votes: vec![
+                    QuorumVote {
+                        node: &one,
+                        message: &msg_a,
+                        view: &view_3_1_normal,
+                    },
+                    QuorumVote {
+                        node: &one,
+                        message: &msg_a,
+                        view: &view_3_1_normal,
+                    },
+                ],
+                quorum_type: QuorumType::NormalQuorum,
+                expected: Err(()),
+            },
+            TestCase {
+                name: "Byzantine - Node votes twice with different results",
+                line_number: line!(),
+                votes: vec![
+                    QuorumVote {
+                        node: &one,
+                        message: &msg_a,
+                        view: &view_3_1_normal,
+                    },
+                    QuorumVote {
+                        node: &one,
+                        message: &msg_b,
+                        view: &view_3_1_normal,
+                    },
+                    QuorumVote {
+                        node: &two,
+                        message: &msg_a,
+                        view: &view_3_1_normal,
+                    },
+                    QuorumVote {
+                        node: &three,
+                        message: &msg_b,
+                        view: &view_3_1_normal,
                     },
                 ],
                 quorum_type: QuorumType::NormalQuorum,
