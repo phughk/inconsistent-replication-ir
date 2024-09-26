@@ -23,18 +23,30 @@ pub fn slow_quorum(nodes: usize) -> Result<usize, ()> {
 }
 
 pub struct QuorumVote<'a, ID: NodeID, MSG: IRMessage> {
-    node: &'a ID,
-    message: &'a MSG,
-    view: &'a View<ID>,
+    pub(crate) node: &'a ID,
+    pub(crate) message: &'a MSG,
+    pub(crate) view: &'a View<ID>,
+}
+
+impl<'a, ID: NodeID, MSG: IRMessage> Clone for QuorumVote<'a, ID, MSG> {
+    fn clone(&self) -> Self {
+        QuorumVote {
+            node: self.node,
+            message: self.message,
+            view: self.view,
+        }
+    }
 }
 
 #[derive(Eq, PartialEq)]
-struct Quorum<'a, ID: NodeID, MSG: IRMessage> {
-    count: usize,
-    message: &'a MSG,
-    nodes_with: Vec<&'a ID>,
-    nodes_without: Vec<&'a ID>,
-    view: &'a View<ID>,
+/// A quorum was achieved and the details are included in this struct
+pub(crate) struct Quorum<'a, ID: NodeID, MSG: IRMessage> {
+    pub(crate) count: usize,
+    pub(crate) message: &'a MSG,
+    pub(crate) nodes_with: Vec<&'a ID>,
+    pub(crate) nodes_without: Vec<&'a ID>,
+    pub(crate) view: &'a View<ID>,
+    pub(crate) quorum_type: QuorumType,
 }
 
 impl<'a, ID: NodeID, MSG: IRMessage> Debug for Quorum<'a, ID, MSG>
@@ -49,6 +61,28 @@ where
             .field("nodes_with", &self.nodes_with)
             .field("nodes_without", &self.nodes_without)
             .field("view", &self.view)
+            .field("quorum_type", &self.quorum_type)
+            .finish() // Concludes the formatting
+    }
+}
+
+#[derive(Eq, PartialEq)]
+/// Represents no quorum for the provided nodes, but gives enough information
+/// to provide to the decide function to resolve conflicts
+pub(crate) struct NoQuorum<'a, ID: NodeID, MSG: IRMessage> {
+    pub(crate) view: &'a View<ID>,
+    pub(crate) votes: BTreeMap<&'a MSG, Vec<&'a ID>>,
+}
+
+impl<'a, ID: NodeID, MSG: IRMessage> Debug for NoQuorum<'a, ID, MSG>
+where
+    ID: Debug,
+    MSG: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoQuorum")
+            .field("view", &self.view)
+            .field("votes", &self.votes)
             .finish() // Concludes the formatting
     }
 }
@@ -62,14 +96,13 @@ pub fn find_quorum<
     'a,
     ID: NodeID,
     MSG: IRMessage,
-    ITER: Iterator<Item = &'a QuorumVote<'a, ID, MSG>>,
+    ITER: Iterator<Item = QuorumVote<'a, ID, MSG>>,
 >(
     iterable: ITER,
     quorum_type: QuorumType,
-) -> Result<Quorum<'a, ID, MSG>, ()> {
+) -> Result<Quorum<'a, ID, MSG>, Option<NoQuorum<'a, ID, MSG>>> {
     let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, BTreeSet<&ID>>> = BTreeMap::new();
     let mut highest_view: Option<&'a View<ID>> = None;
-    // TODO duplicate votes from same node - this can be a map, and the value gets replaced with the most appropriate vote (view number)
     let mut all_nodes = BTreeSet::new();
     // Tally up all the votes
     for item in iterable {
@@ -87,23 +120,30 @@ pub fn find_quorum<
     }
     let mut opposing_nodes = all_nodes;
     // Find the highest view
-    let highest_view = highest_view.ok_or(())?;
+    let highest_view = highest_view.ok_or(None)?;
     // Find the highest number of votes
     let (quorum_vote_message, quorum_vote_nodes) = votes
         .get(highest_view)
-        .ok_or(())?
+        .ok_or(None)?
         .iter()
         .max_by(|a, b| a.1.len().cmp(&b.1.len()))
-        .ok_or(())?;
-    // Avoid pathological situations where there are multiple quorums
-    let how_many_quorums = votes
+        .ok_or(None)?;
+    // Handle pathological situations where there are multiple quorums
+    let many_quorums: Vec<_> = votes
         .get(highest_view)
-        .ok_or(())?
+        .ok_or(None)?
         .iter()
         .filter(|(_msg, votes)| votes.len() >= quorum_vote_nodes.len())
-        .count();
-    if how_many_quorums > 1 {
-        return Err(());
+        .collect();
+    if many_quorums.len() > 1 {
+        let mut votes = BTreeMap::new();
+        for (msg, voters) in many_quorums {
+            votes.insert(*msg, voters.iter().map(|a| *a).collect());
+        }
+        return Err(Some(NoQuorum {
+            view: highest_view,
+            votes,
+        }));
     }
     // Add all nodes from the view
     for node in highest_view.members.iter() {
@@ -114,23 +154,40 @@ pub fn find_quorum<
         opposing_nodes.remove(node);
     }
     // Check quorum against view
-    let quorum_size = match quorum_type {
-        QuorumType::FastQuorum => fast_quorum(highest_view.members.len())?,
-        QuorumType::NormalQuorum => slow_quorum(highest_view.members.len())?,
-    };
-    if quorum_vote_nodes.len() >= quorum_size {
+    if quorum_vote_nodes.len() >= fast_quorum(highest_view.members.len()).unwrap() {
         Ok(Quorum {
             count: quorum_vote_nodes.len(),
             message: quorum_vote_message,
             nodes_with: quorum_vote_nodes.into_iter().map(|a| *a).collect(),
             nodes_without: opposing_nodes.into_iter().collect(),
             view: highest_view,
+            quorum_type: QuorumType::FastQuorum,
+        })
+    } else if quorum_vote_nodes.len() >= slow_quorum(highest_view.members.len()).unwrap() {
+        Ok(Quorum {
+            count: quorum_vote_nodes.len(),
+            message: quorum_vote_message,
+            nodes_with: quorum_vote_nodes.into_iter().map(|a| *a).collect(),
+            nodes_without: opposing_nodes.into_iter().collect(),
+            view: highest_view,
+            quorum_type: QuorumType::NormalQuorum,
         })
     } else {
-        Err(())
+        return Err(Some(NoQuorum {
+            view: highest_view,
+            votes: votes
+                .get(highest_view)
+                .ok_or(None)?
+                .iter()
+                .map(|(msg, voters)| (*msg, voters.iter().map(|a| *a).collect()))
+                .collect(),
+        }));
     }
 }
 
+#[derive(Eq, PartialEq)]
+#[cfg(debug_assertions)]
+#[derive(Debug)]
 pub enum QuorumType {
     FastQuorum,
     NormalQuorum,
@@ -138,8 +195,9 @@ pub enum QuorumType {
 
 #[cfg(test)]
 mod test {
-    use crate::server::ViewState;
-    use crate::utils::{Quorum, QuorumType, QuorumVote};
+    use crate::server::{View, ViewState};
+    use crate::utils::{NoQuorum, Quorum, QuorumType, QuorumVote};
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_f() {
@@ -195,7 +253,7 @@ mod test {
             line_number: u32,
             votes: Vec<QuorumVote<'a, String, String>>,
             quorum_type: QuorumType,
-            expected: Result<Quorum<'a, String, String>, ()>,
+            expected: Result<Quorum<'a, String, String>, Option<NoQuorum<'a, String, String>>>,
         }
 
         fn view(num: u64, members: &[&'static str], state: ViewState) -> super::View<String> {
@@ -216,7 +274,11 @@ mod test {
         let msg_b = "B".to_string();
 
         // view_<number_of_nodes>_<view_number>_state
-        let view_3_1_normal = view(1, &["1", "2", "3"], ViewState::Normal);
+        let view_3_1_normal = View {
+            view: 1,
+            members: vec![one.clone(), two.clone(), three.clone()],
+            state: ViewState::Normal,
+        };
         let view_3_2_normal = view(2, &["1", "2", "3"], ViewState::Normal);
         let view_4_1_normal = view(1, &["1", "2", "3", "4"], ViewState::Normal);
 
@@ -250,6 +312,7 @@ mod test {
                     nodes_with: vec![&one, &two, &three],
                     nodes_without: vec![],
                     view: &view_3_1_normal,
+                    quorum_type: QuorumType::FastQuorum,
                 }),
             },
             TestCase {
@@ -279,6 +342,7 @@ mod test {
                     nodes_with: vec![&two, &three],
                     nodes_without: vec![&one],
                     view: &view_3_1_normal,
+                    quorum_type: QuorumType::NormalQuorum,
                 }),
             },
             TestCase {
@@ -303,6 +367,7 @@ mod test {
                     nodes_with: vec![&one, &two],
                     nodes_without: vec![&three],
                     view: &view_3_1_normal,
+                    quorum_type: QuorumType::NormalQuorum,
                 }),
             },
             TestCase {
@@ -326,7 +391,10 @@ mod test {
                     },
                 ],
                 quorum_type: QuorumType::NormalQuorum,
-                expected: Err(()),
+                expected: Err(Some(NoQuorum {
+                    view: &view_3_2_normal,
+                    votes: BTreeMap::from([(&msg_a, vec![&three])]),
+                })),
             },
             TestCase {
                 name: "Quorum is achieved if one value has a smaller view",
@@ -355,6 +423,7 @@ mod test {
                     nodes_with: vec![&one, &two],
                     nodes_without: vec![&three],
                     view: &view_3_2_normal,
+                    quorum_type: QuorumType::NormalQuorum,
                 }),
             },
             TestCase {
@@ -383,7 +452,13 @@ mod test {
                     },
                 ],
                 quorum_type: QuorumType::NormalQuorum,
-                expected: Err(()),
+                expected: Err(Some(NoQuorum {
+                    view: &view_4_1_normal,
+                    votes: BTreeMap::from([
+                        (&msg_a, vec![&one, &two]),
+                        (&msg_b, vec![&three, &four]),
+                    ]),
+                })),
             },
             TestCase {
                 name: "Double votes do not count",
@@ -401,7 +476,10 @@ mod test {
                     },
                 ],
                 quorum_type: QuorumType::NormalQuorum,
-                expected: Err(()),
+                expected: Err(Some(NoQuorum {
+                    view: &view_3_1_normal,
+                    votes: BTreeMap::from([(&msg_a, vec![&one])]),
+                })),
             },
             TestCase {
                 name: "Byzantine - Node votes twice with different results",
@@ -429,12 +507,20 @@ mod test {
                     },
                 ],
                 quorum_type: QuorumType::NormalQuorum,
-                expected: Err(()),
+                expected: Err(Some(NoQuorum {
+                    view: &view_3_1_normal,
+                    votes: BTreeMap::from([
+                        (&msg_a, vec![&one, &two]),
+                        (&msg_b, vec![&one, &three]),
+                    ]),
+                })),
             },
+            // TODO Test fast quorum
+            // TODO Add feature to upgrade quorum from normal to fast if fast quorum is met
         ];
 
         for case in cases {
-            let result = super::find_quorum(case.votes.iter(), case.quorum_type);
+            let result = super::find_quorum(case.votes.iter().cloned(), case.quorum_type);
             assert_eq!(
                 result, case.expected,
                 "{} - {}",

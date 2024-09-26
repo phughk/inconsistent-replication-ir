@@ -1,11 +1,10 @@
 use crate::io::{IRClientStorage, IRNetwork};
 use crate::server::View;
 use crate::types::{DecideFunction, IRMessage, NodeID};
-use crate::utils::slow_quorum;
+use crate::utils::{find_quorum, Quorum, QuorumType, QuorumVote};
 use crate::IRStorage;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -18,7 +17,9 @@ use tokio::sync::RwLock;
 const MINIMUM_CLUSTER_SIZE: usize = 3;
 
 /// This is how many retries will happen in total
-const MAX_ATTEMPTS: u8 = 100;
+/// Since the network should be performing the retries, this is set to 0
+/// And is only used to enforce an end cycle to the loop
+const MAX_ATTEMPTS: u8 = 0;
 
 /// The client used to interact with the IR cluster.
 /// Addresses are provided via the view on the storage interface.
@@ -79,7 +80,7 @@ impl<
         let network = self.network.clone();
         let client_id = self.client_id.clone();
         let mut responses = self
-            .request_until_quorum(
+            .request_until_number_of_responses(
                 &nodes,
                 sequence,
                 message,
@@ -103,35 +104,27 @@ impl<
                 },
             )
             .await?;
-        assert!(responses.len() >= slow_quorum(nodes_len).unwrap());
-
-        // Validate views
-        if let Err(highest) = Self::validate_view(responses.iter().map(|r| &r.1 .1), None) {
-            // Views are invalid and we must now message invalid views to catch up
-            for (node, (_msg, view)) in &responses {
-                if view.view < highest.view {
-                    self.network
-                        .invoke_view_change(node.clone(), highest.clone())
-                        .await
-                        .unwrap();
-                }
-            }
-            return Err("Views are invalid");
+        let quorum: Quorum<ID, MSG> = find_quorum(
+            responses.iter().map(|(node_id, (msg, view))| QuorumVote {
+                node: node_id,
+                message: msg,
+                view,
+            }),
+            QuorumType::NormalQuorum,
+        )
+        .map_err(|_| "Quorum not found")?;
+        for node_id in quorum.view.members.iter().cloned() {
+            self.network
+                .async_finalize(
+                    node_id,
+                    self.client_id.clone(),
+                    sequence,
+                    quorum.message.clone(),
+                )
+                .await
+                .unwrap();
         }
-
-        if responses.is_empty() {
-            return Err("No responses received");
-        }
-        let expected_msg = &responses[0].1 .0;
-        let all_same = responses.iter().all(|r| {
-            let (_, (msg, _)) = r;
-            msg == expected_msg
-        });
-        if all_same {
-            let (_node, (msg, _view)) = responses.into_iter().next().unwrap();
-            return Ok(msg);
-        }
-        Err("Responses didn't match or weren't enough")
+        Ok(quorum.message.clone())
     }
 
     /// Make a consistent request to the cluster
@@ -155,49 +148,57 @@ impl<
         let network = self.network.clone();
         let client_id = self.client_id.clone();
         let responses = self
-            .request_until_quorum(&nodes, sequence, message, |node, sequence, message, _| {
-                Box::pin({
-                    let network = network.clone();
-                    let client_id = client_id.clone();
-                    // Copy 🤡
-                    let sequence = sequence;
-                    async move {
-                        let res = network
-                            .propose_consistent(node.clone(), client_id, sequence, message)
-                            .await;
-                        (node, res.map_err(|_| "Failed to propose consistent"))
-                    }
-                })
-            })
+            .request_until_number_of_responses(
+                &nodes,
+                sequence,
+                message,
+                |node, sequence, message, _| {
+                    Box::pin({
+                        let network = network.clone();
+                        let client_id = client_id.clone();
+                        // Copy 🤡
+                        let sequence = sequence;
+                        async move {
+                            let res = network
+                                .propose_consistent(node.clone(), client_id, sequence, message)
+                                .await;
+                            (node, res.map_err(|_| "Failed to propose consistent"))
+                        }
+                    })
+                },
+            )
             .await?;
-        assert!(responses.len() >= slow_quorum(nodes.len()).unwrap());
+        let quorum = find_quorum(
+            responses.iter().map(|(node_id, (msg, view))| QuorumVote {
+                node: node_id,
+                message: msg,
+                view,
+            }),
+            QuorumType::NormalQuorum,
+        )
+        .map_err(|_| "Quorum not found")?;
 
-        let all_same = responses.iter().all(|r| r == &responses[0]);
-        if all_same {
-            for node in nodes {
-                let (_node_id, (msg, view)) = responses[0].clone();
-                self.network
-                    .async_finalize(node, self.client_id.clone(), sequence, msg)
-                    .await
-                    .unwrap();
+        match quorum.quorum_type {
+            QuorumType::FastQuorum => {
+                // We can do async finalize
+                for node_id in quorum.view.members.iter().cloned() {
+                    self.network
+                        .async_finalize(
+                            node_id,
+                            self.client_id.clone(),
+                            sequence,
+                            quorum.message.clone(),
+                        )
+                        .await
+                        .unwrap();
+                }
             }
-            return Ok(());
+            QuorumType::NormalQuorum => {
+
+                // TODO wait for f+1 confirm responses
+            }
         }
 
-        // We do not have a fast quorum and must continue to a slow quorum
-        let mut votes = BTreeSet::new();
-        for (_node_id, (msg, _view)) in responses {
-            votes.insert(msg);
-        }
-        // Now we let the decide function decide the result
-        let result = decide_function.decide(votes.iter());
-        // Finally send the decided vote to all nodes
-        for node in nodes {
-            self.network
-                .sync_finalize(node, self.client_id.clone(), sequence, result.clone())
-                .await
-                .unwrap();
-        }
         Ok(())
     }
 
@@ -237,7 +238,7 @@ impl<
         }
     }
 
-    async fn request_until_quorum<
+    async fn request_until_number_of_responses<
         F: Fn(
             ID,
             u64,
@@ -258,19 +259,19 @@ impl<
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut attempts = 0;
-        while responses.len() < slow_quorum(nodes.len()).unwrap() && attempts < MAX_ATTEMPTS {
+        // TODO remove the max attempts - the algo should not be handling network failures. The network layer does retries.
+        while responses.len() < nodes.len() {
             match requests.next().await {
                 Some((node, Ok(response))) => responses.push((node, response)),
                 Some((node, Err(_e))) => {
                     // Retry the request
-                    attempts += 1;
-                    requests.push(request(node, sequence, message.clone(), None));
+                    if attempts < MAX_ATTEMPTS {
+                        attempts += 1;
+                        requests.push(request(node, sequence, message.clone(), None));
+                    }
                 }
                 None => break,
             }
-        }
-        if attempts >= MAX_ATTEMPTS {
-            return Err("Too many attempts");
         }
         Ok(responses)
     }
