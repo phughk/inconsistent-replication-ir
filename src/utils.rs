@@ -99,7 +99,6 @@ pub fn find_quorum<
     ITER: Iterator<Item = QuorumVote<'a, ID, MSG>>,
 >(
     iterable: ITER,
-    quorum_type: QuorumType,
 ) -> Result<Quorum<'a, ID, MSG>, Option<NoQuorum<'a, ID, MSG>>> {
     let mut votes: BTreeMap<&View<ID>, BTreeMap<&MSG, BTreeSet<&ID>>> = BTreeMap::new();
     let mut highest_view: Option<&'a View<ID>> = None;
@@ -284,7 +283,6 @@ mod test {
 
         let cases: Vec<TestCase> = vec![
             // TODO quorum not achieved if no votes
-            // TODO 4 nodes (f=1) and 2=A, 2=B
             TestCase {
                 name: "Quorum is achieved if all votes are the same",
                 line_number: line!(),
@@ -515,12 +513,10 @@ mod test {
                     ]),
                 })),
             },
-            // TODO Test fast quorum
-            // TODO Add feature to upgrade quorum from normal to fast if fast quorum is met
         ];
 
         for case in cases {
-            let result = super::find_quorum(case.votes.iter().cloned(), case.quorum_type);
+            let result = super::find_quorum(case.votes.iter().cloned());
             assert_eq!(
                 result, case.expected,
                 "{} - {}",

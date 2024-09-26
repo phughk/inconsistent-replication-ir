@@ -104,15 +104,13 @@ impl<
                 },
             )
             .await?;
-        let quorum: Quorum<ID, MSG> = find_quorum(
-            responses.iter().map(|(node_id, (msg, view))| QuorumVote {
+        let quorum: Quorum<ID, MSG> =
+            find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
                 node: node_id,
                 message: msg,
                 view,
-            }),
-            QuorumType::NormalQuorum,
-        )
-        .map_err(|_| "Quorum not found")?;
+            }))
+            .map_err(|_| "Quorum not found")?;
         for node_id in quorum.view.members.iter().cloned() {
             self.network
                 .async_finalize(
@@ -168,14 +166,11 @@ impl<
                 },
             )
             .await?;
-        let quorum = find_quorum(
-            responses.iter().map(|(node_id, (msg, view))| QuorumVote {
-                node: node_id,
-                message: msg,
-                view,
-            }),
-            QuorumType::NormalQuorum,
-        )
+        let quorum = find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
+            node: node_id,
+            message: msg,
+            view,
+        }))
         .map_err(|_| "Quorum not found")?;
 
         match quorum.quorum_type {
