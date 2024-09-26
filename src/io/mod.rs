@@ -86,6 +86,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
         &self,
         client: ID,
         operation: u64,
+        view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 
@@ -94,6 +95,8 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
         &self,
         client: ID,
         operation: u64,
+        view: View<ID>,
+        message: MSG,
     ) -> Pin<Box<dyn Future<Output = ()>>>;
 
     /// Consistent operations are executed when they are proposed
@@ -101,6 +104,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
         &self,
         client: ID,
         operation: u64,
+        view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 
@@ -109,6 +113,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
         &self,
         client: ID,
         operation: u64,
+        view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG>>>;
 }

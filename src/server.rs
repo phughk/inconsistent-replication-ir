@@ -90,7 +90,7 @@ impl<
             let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let m = storage
-                .record_tentative_inconsistent(client_id, operation_sequence, message)
+                .record_tentative_inconsistent(client_id, operation_sequence, view.clone(), message)
                 .await;
             (m, view)
         })
@@ -110,7 +110,12 @@ impl<
             let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let _ = storage
-                .promote_finalized_and_exec_inconsistent(client_id, operation_sequence)
+                .promote_finalized_and_exec_inconsistent(
+                    client_id,
+                    operation_sequence,
+                    view.clone(),
+                    message.clone(),
+                )
                 .await;
             (message, view)
         })
@@ -129,10 +134,15 @@ impl<
             let view_lock = view.read().await;
             let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
-            let m = storage
-                .record_tentative_and_exec_consistent(client_id, operation_sequence, message)
+            let resolved_message = storage
+                .record_tentative_and_exec_consistent(
+                    client_id,
+                    operation_sequence,
+                    view.clone(),
+                    message,
+                )
                 .await;
-            (m, view)
+            (resolved_message, view)
         })
     }
 
@@ -150,7 +160,12 @@ impl<
             let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let m = storage
-                .promote_finalized_and_reconcile_consistent(client_id, operation_sequence, message)
+                .promote_finalized_and_reconcile_consistent(
+                    client_id,
+                    operation_sequence,
+                    view.clone(),
+                    message,
+                )
                 .await;
             (m, view)
         })
