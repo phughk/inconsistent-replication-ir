@@ -7,7 +7,7 @@ use tokio::sync::RwLock as TokioRwLock;
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct RecordKey<ID: NodeID> {
     client: ID,
-    operation: u64,
+    sequence: u64,
     view: View<ID>,
 }
 
@@ -15,7 +15,7 @@ struct RecordKey<ID: NodeID> {
 struct RecordValue<MSG: IRMessage> {
     state: State,
     operation_type: OperationType,
-    message: MSG,
+    operation: MSG,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -61,14 +61,14 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
             .read()
             .await
             .iter()
-            .filter(|(k, _v)| k.client == client && k.operation == operation)
+            .filter(|(k, _v)| k.client == client && k.sequence == operation)
             .map(|(k, v)| FullState {
                 client: k.client.clone(),
-                operation: k.operation,
+                operation: k.sequence,
                 view: k.view.clone(),
                 state: v.state.clone(),
                 operation_type: v.operation_type.clone(),
-                message: v.message.clone(),
+                message: v.operation.clone(),
             })
             .collect();
         assert!(found.len() <= 1);
@@ -78,21 +78,21 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn propose_tentative_inconsistent(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
-        message: MSG,
+        operation: MSG,
     ) {
         let mut write_lock = self.records.write().await;
         write_lock.insert(
             RecordKey {
                 client,
-                operation,
+                sequence: sequence,
                 view,
             },
             RecordValue {
                 state: State::Tentative,
                 operation_type: OperationType::Inconsistent,
-                message,
+                operation,
             },
         );
     }
@@ -100,7 +100,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn promote_finalized_inconsistent(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
         message: MSG,
     ) {
@@ -108,13 +108,13 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
         write_lock.insert(
             RecordKey {
                 client,
-                operation,
+                sequence,
                 view,
             },
             RecordValue {
                 state: State::Finalized,
                 operation_type: OperationType::Inconsistent,
-                message,
+                operation: message,
             },
         );
     }
@@ -122,45 +122,46 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn propose_tentative_consistent(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
-        message: MSG,
+        operation: MSG,
     ) {
         let mut write_lock = self.records.write().await;
         write_lock.insert(
             RecordKey {
                 client,
-                operation,
+                sequence,
                 view,
             },
             RecordValue {
                 state: State::Tentative,
                 operation_type: OperationType::Consistent,
-                message,
+                operation,
             },
         );
     }
 
-    pub(crate) async fn promote_finalized_consistent(
+    pub(crate) async fn promote_finalized_consistent_returning_previous_evaluation(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
-        message: MSG,
-    ) -> MSG {
+        operation: MSG,
+    ) -> Option<MSG> {
         let mut write_lock = self.records.write().await;
+        let key = RecordKey {
+            client,
+            sequence,
+            view,
+        };
         let previous = write_lock.insert(
-            RecordKey {
-                client,
-                operation,
-                view,
-            },
+            key,
             RecordValue {
                 state: State::Finalized,
                 operation_type: OperationType::Consistent,
-                message: message.clone(),
+                operation: operation.clone(),
             },
         );
-        previous.map(|s| s.message).unwrap_or(message)
+        previous.map(|s| s.operation)
     }
 }

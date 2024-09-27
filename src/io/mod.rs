@@ -82,7 +82,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
     /// Record a message as tentative for a client and operation number
     /// The message must be recorded as tentative even if the operation is rejected
     /// This is to resolve quorums
-    fn record_tentative_inconsistent(
+    fn record_tentative_inconsistent_and_evaluate(
         &self,
         client: ID,
         operation: u64,

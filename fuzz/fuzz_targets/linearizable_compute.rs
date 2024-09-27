@@ -13,13 +13,25 @@ pub struct LinearizableComputer {
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum LinearizableComputeOperation {
-    ReadRequest { key: u64 },
-    ReadResponse { key: u64, value: Vec<u64> },
-    WriteRequest { key: u64, value: Vec<u64> },
-    WriteResponse { key: u64, value: Vec<u64> },
+    ReadOperation {
+        key: u64,
+        computed_value: Option<Vec<u64>>,
+    },
+    WriteOperation {
+        key: u64,
+        requested_value: Vec<u64>,
+        computed_value: Option<Vec<u64>>,
+    },
 }
 
 impl MockOperationHandler<LinearizableComputeOperation> for LinearizableComputer {
+    fn evaluate_inconsistent(
+        &self,
+        message: LinearizableComputeOperation,
+    ) -> LinearizableComputeOperation {
+        self.exec(message)
+    }
+
     fn exec_inconsistent(
         &self,
         message: LinearizableComputeOperation,
@@ -36,32 +48,32 @@ impl MockOperationHandler<LinearizableComputeOperation> for LinearizableComputer
 
     fn reconcile_consistent(
         &self,
-        previous_response: LinearizableComputeOperation,
+        _previous_response: Option<LinearizableComputeOperation>,
         decided_response: LinearizableComputeOperation,
     ) -> LinearizableComputeOperation {
         match decided_response {
-            LinearizableComputeOperation::ReadResponse { key, value } => {
-                LinearizableComputeOperation::ReadResponse { key, value }
+            LinearizableComputeOperation::ReadOperation {
+                key,
+                computed_value,
+            } => {
+                // There is nothing to reconcile for read operations
+                LinearizableComputeOperation::ReadOperation {
+                    key,
+                    computed_value,
+                }
             }
-            LinearizableComputeOperation::WriteResponse { key, value } => {
-                // Linearizable requests maybe do not get resolution if there is a consistent request?
-                let mut key_lock = self.data.write().unwrap();
-                let previous_opt_lock_holder = key_lock
-                    .insert(key, Arc::new(RwLock::new(value.clone())))
-                    .clone()
-                    .unwrap();
-                let previous_opt_lock = previous_opt_lock_holder.read().unwrap();
-                let read_previous = previous_opt_lock.clone();
-                assert_eq!(
-                    LinearizableComputeOperation::WriteResponse {
-                        key,
-                        value: read_previous
-                    },
-                    previous_response
-                );
-                LinearizableComputeOperation::WriteResponse { key, value }
+            LinearizableComputeOperation::WriteOperation {
+                key,
+                requested_value,
+                computed_value,
+            } => {
+                // We are going to ignore our previous response and just apply the decided response
+                LinearizableComputeOperation::WriteOperation {
+                    key,
+                    requested_value,
+                    computed_value,
+                }
             }
-            _ => panic!("unsupported operation for reconcile"),
         }
     }
 }
@@ -75,36 +87,58 @@ impl LinearizableComputer {
 
     fn exec(&self, message: LinearizableComputeOperation) -> LinearizableComputeOperation {
         match message {
-            LinearizableComputeOperation::ReadRequest { key } => {
+            LinearizableComputeOperation::ReadOperation {
+                key,
+                computed_value,
+            } => {
+                assert!(
+                    computed_value.is_none(),
+                    "We should only execute on non-computed operations"
+                );
                 let key_lock = self.data.read().unwrap();
                 match key_lock.contains_key(&key) {
                     true => {
                         let values = key_lock.get(&key).unwrap().read().unwrap().clone();
-                        LinearizableComputeOperation::ReadResponse { key, value: values }
+                        LinearizableComputeOperation::ReadOperation {
+                            key,
+                            computed_value: Some(values),
+                        }
                     }
-                    false => LinearizableComputeOperation::ReadResponse {
+                    false => LinearizableComputeOperation::ReadOperation {
                         key,
-                        value: Vec::new(),
+                        computed_value: Some(Vec::new()),
                     },
                 }
             }
-            LinearizableComputeOperation::WriteRequest { key, value } => {
+            LinearizableComputeOperation::WriteOperation {
+                key,
+                requested_value,
+                computed_value,
+            } => {
+                assert!(
+                    computed_value.is_none(),
+                    "We should only execute on non-computed operations"
+                );
                 let mut key_lock = self.data.write().unwrap();
                 match key_lock.contains_key(&key) {
                     true => {
-                        key_lock.get(&key).unwrap().write().unwrap().extend(value);
+                        // Noop, we have the key
                     }
                     false => {
-                        key_lock.insert(key, Arc::new(RwLock::new(value)));
+                        key_lock.insert(key, Arc::new(RwLock::new(Vec::new())));
                     }
                 }
-                let val_lock = key_lock.get(&key).unwrap().read().unwrap();
-                LinearizableComputeOperation::WriteResponse {
+                drop(key_lock);
+                let key_lock = self.data.read().unwrap();
+                let key_entry = key_lock.get(&key).unwrap().clone();
+                let mut val_lock = key_entry.write().unwrap();
+                val_lock.extend(computed_value.unwrap_or(Vec::new()));
+                LinearizableComputeOperation::WriteOperation {
                     key,
-                    value: val_lock.clone(),
+                    requested_value,
+                    computed_value: Some(val_lock.clone()),
                 }
             }
-            _ => panic!("unsupported operation for exec"),
         }
     }
 }
@@ -113,13 +147,15 @@ impl<'a> Arbitrary<'a> for LinearizableComputeOperation {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let op_choice = u.int_in_range(0..=1)?;
         if op_choice == 0 {
-            Ok(LinearizableComputeOperation::ReadRequest {
+            Ok(LinearizableComputeOperation::ReadOperation {
                 key: u.arbitrary()?,
+                computed_value: None,
             })
         } else {
-            Ok(LinearizableComputeOperation::WriteRequest {
+            Ok(LinearizableComputeOperation::WriteOperation {
                 key: u.arbitrary()?,
-                value: u.arbitrary()?,
+                requested_value: u.arbitrary()?,
+                computed_value: None,
             })
         }
     }

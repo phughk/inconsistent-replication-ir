@@ -1,3 +1,4 @@
+use crate::debug::MaybeDebug;
 use crate::io::{IRNetwork, IRStorage};
 use crate::types::{IRMessage, NodeID};
 use std::future::Future;
@@ -83,6 +84,10 @@ impl<
         // TODO
         _highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+        println!(
+            "propose_inconsistent: {}",
+            MaybeDebug::maybe_debug(&message)
+        );
         let storage = self.storage.clone();
         let view = self.view.clone();
         Box::pin(async move {
@@ -90,7 +95,12 @@ impl<
             let view = view_lock.clone();
             assert_eq!(view.state, ViewState::Normal);
             let m = storage
-                .record_tentative_inconsistent(client_id, operation_sequence, view.clone(), message)
+                .record_tentative_inconsistent_and_evaluate(
+                    client_id,
+                    operation_sequence,
+                    view.clone(),
+                    message,
+                )
                 .await;
             (m, view)
         })
@@ -103,6 +113,10 @@ impl<
         operation_sequence: u64,
         message: M,
     ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+        println!(
+            "finalize_inconsistent: {}",
+            MaybeDebug::maybe_debug(&message)
+        );
         let storage = self.storage.clone();
         let view = self.view.clone();
         Box::pin(async move {

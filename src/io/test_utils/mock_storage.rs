@@ -1,5 +1,7 @@
+use crate::debug::MaybeDebug;
 use crate::io::{IRClientStorage, StorageShared};
 use crate::server::{View, ViewState};
+use crate::test_utils::mock_computers::MockOperationHandler;
 use crate::test_utils::mock_record_store::{MockRecordStore, OperationType, State};
 use crate::types::{IRMessage, NodeID};
 use crate::IRStorage;
@@ -7,12 +9,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
-
-pub trait MockOperationHandler<M: IRMessage>: Clone + 'static {
-    fn exec_inconsistent(&self, message: M) -> M;
-    fn exec_consistent(&self, message: M) -> M;
-    fn reconcile_consistent(&self, previous: M, message: M) -> M;
-}
 
 #[derive(Clone)]
 pub struct MockIRStorage<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> {
@@ -33,13 +29,17 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> StorageShared<I
 impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, MSG>
     for MockIRStorage<ID, MSG, CPU>
 {
-    fn record_tentative_inconsistent(
+    fn record_tentative_inconsistent_and_evaluate(
         &self,
         client: ID,
         operation: u64,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
+        println!(
+            "record_tentative_inconsistent operation: {}",
+            MaybeDebug::maybe_debug(&message)
+        );
         let records = self.records.clone();
         let computer_lol = self.computer_lol.clone();
         Box::pin(async move {
@@ -59,7 +59,7 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
             records
                 .propose_tentative_inconsistent(client, operation, view, message.clone())
                 .await;
-            computer_lol.exec_inconsistent(message)
+            computer_lol.evaluate_inconsistent(message)
         })
     }
 
@@ -70,6 +70,10 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
+        println!(
+            "promote_finalized_and_exec_inconsistent: {}",
+            MaybeDebug::maybe_debug(&message)
+        );
         let records = self.records.clone();
         let computer = self.computer_lol.clone();
         Box::pin(async move {
@@ -96,14 +100,14 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
     fn record_tentative_and_exec_consistent(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
-        message: MSG,
+        operation: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
         let records = self.records.clone();
         let computer = self.computer_lol.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), operation).await;
+            let existing = records.find_entry(client.clone(), sequence).await;
             match existing {
                 None => {
                     // All good here
@@ -114,24 +118,25 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                     assert!(state.state != State::Finalized);
                 }
             }
+            let response = computer.exec_consistent(operation.clone());
             records
-                .propose_tentative_consistent(client, operation, view, message.clone())
+                .propose_tentative_consistent(client, sequence, view, operation.clone())
                 .await;
-            computer.exec_consistent(message)
+            response
         })
     }
 
     fn promote_finalized_and_reconcile_consistent(
         &self,
         client: ID,
-        operation: u64,
+        sequence: u64,
         view: View<ID>,
-        message: MSG,
+        operation: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
         let records = self.records.clone();
         let computer = self.computer_lol.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), operation).await;
+            let existing = records.find_entry(client.clone(), sequence).await;
             match existing {
                 None => {
                     // Valid
@@ -143,9 +148,14 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                 }
             }
             let previous = records
-                .promote_finalized_consistent(client, operation, view, message.clone())
+                .promote_finalized_consistent_returning_previous_evaluation(
+                    client,
+                    sequence,
+                    view,
+                    operation.clone(),
+                )
                 .await;
-            computer.reconcile_consistent(previous, message)
+            computer.reconcile_consistent(previous, operation)
         })
     }
 }

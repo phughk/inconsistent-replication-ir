@@ -1,4 +1,6 @@
+#![feature(specialization)]
 mod client;
+pub(crate) mod debug;
 mod io;
 mod server;
 pub mod types;
