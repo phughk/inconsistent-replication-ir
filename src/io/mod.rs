@@ -78,7 +78,7 @@ pub trait StorageShared<ID: NodeID> {
 }
 
 /// Provides access to a storage log for views and persistence
-pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {
+pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'static {
     /// Record a message as tentative for a client and operation number
     /// The message must be recorded as tentative even if the operation is rejected
     /// This is to resolve quorums

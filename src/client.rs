@@ -176,16 +176,23 @@ impl<
         match quorum.quorum_type {
             QuorumType::FastQuorum => {
                 // We can do async finalize
+                let mut failed_requests = Vec::with_capacity(quorum.view.members.len());
                 for node_id in quorum.view.members.iter().cloned() {
-                    self.network
+                    let resp = self
+                        .network
                         .async_finalize_consistent(
-                            node_id,
+                            node_id.clone(),
                             self.client_id.clone(),
                             sequence,
                             quorum.message.clone(),
                         )
-                        .await
-                        .unwrap();
+                        .await;
+                    if resp.is_err() {
+                        failed_requests.push(node_id);
+                    }
+                }
+                if !failed_requests.is_empty() {
+                    panic!("What do if failed requests? Technically need to retry. Maybe panic if no f+1? Modify quorum code to include necessary info")
                 }
             }
             QuorumType::NormalQuorum => {

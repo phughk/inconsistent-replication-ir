@@ -35,20 +35,22 @@ impl<'a> Arbitrary<'a> for TestScenario {
 
 #[derive(Arbitrary, Debug)]
 enum TestStep {
+    /// Make an inconsistent operation
     InconsistentMessage {
         client: usize,
         message: LinearizableComputeOperation,
     },
+    /// Make a consistent operation
     ConsistentMessage {
         client: usize,
         message: LinearizableComputeOperation,
     },
-    DropRequest {
-        who: usize,
-    },
-    DropResponse {
-        who: usize,
-    },
+    /// Make messages to the node drop
+    DropRequest { who: usize },
+    /// Make responses from the node drop
+    DropResponse { who: usize },
+    /// Turn a node on or off
+    FlipSwitch { node: usize },
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Arbitrary)]
@@ -127,6 +129,10 @@ fuzz_target!(|data: TestScenario| {
             }
             TestStep::DropResponse { who } => {
                 network.drop_response_add(who, 1);
+            }
+            TestStep::FlipSwitch { node } => {
+                let node_id = node % data.nodes;
+                smol::block_on(network.switch(node_id))
             }
         }
     }

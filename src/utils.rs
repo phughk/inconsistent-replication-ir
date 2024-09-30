@@ -28,6 +28,7 @@ pub struct QuorumVote<'a, ID: NodeID, MSG: IRMessage> {
     pub(crate) view: &'a View<ID>,
 }
 
+// TODO delete?
 impl<'a, ID: NodeID, MSG: IRMessage> Clone for QuorumVote<'a, ID, MSG> {
     fn clone(&self) -> Self {
         QuorumVote {
@@ -42,6 +43,8 @@ impl<'a, ID: NodeID, MSG: IRMessage> Clone for QuorumVote<'a, ID, MSG> {
 /// A quorum was achieved and the details are included in this struct
 pub(crate) struct Quorum<'a, ID: NodeID, MSG: IRMessage> {
     pub(crate) count: usize,
+    pub(crate) fast_minimum: usize,
+    pub(crate) quorum_minimum: usize,
     pub(crate) message: &'a MSG,
     pub(crate) nodes_with: Vec<&'a ID>,
     pub(crate) nodes_without: Vec<&'a ID>,
@@ -153,18 +156,24 @@ pub fn find_quorum<
         opposing_nodes.remove(node);
     }
     // Check quorum against view
-    if quorum_vote_nodes.len() >= fast_quorum(highest_view.members.len()).unwrap() {
+    let count_fast_quorum = fast_quorum(highest_view.members.len()).unwrap();
+    let count_slow_quorum = slow_quorum(highest_view.members.len()).unwrap();
+    if quorum_vote_nodes.len() >= count_fast_quorum {
         Ok(Quorum {
             count: quorum_vote_nodes.len(),
+            fast_minimum: count_fast_quorum,
+            quorum_minimum: count_slow_quorum,
             message: quorum_vote_message,
             nodes_with: quorum_vote_nodes.into_iter().map(|a| *a).collect(),
             nodes_without: opposing_nodes.into_iter().collect(),
             view: highest_view,
             quorum_type: QuorumType::FastQuorum,
         })
-    } else if quorum_vote_nodes.len() >= slow_quorum(highest_view.members.len()).unwrap() {
+    } else if quorum_vote_nodes.len() >= count_slow_quorum {
         Ok(Quorum {
             count: quorum_vote_nodes.len(),
+            fast_minimum: count_fast_quorum,
+            quorum_minimum: count_slow_quorum,
             message: quorum_vote_message,
             nodes_with: quorum_vote_nodes.into_iter().map(|a| *a).collect(),
             nodes_without: opposing_nodes.into_iter().collect(),
@@ -306,6 +315,8 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 3,
+                    fast_minimum: 3,
+                    quorum_minimum: 2,
                     message: &msg_a,
                     nodes_with: vec![&one, &two, &three],
                     nodes_without: vec![],
@@ -336,6 +347,8 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
+                    fast_minimum: 3,
+                    quorum_minimum: 2,
                     message: &msg_a,
                     nodes_with: vec![&two, &three],
                     nodes_without: vec![&one],
@@ -361,6 +374,8 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
+                    fast_minimum: 3,
+                    quorum_minimum: 2,
                     message: &msg_a,
                     nodes_with: vec![&one, &two],
                     nodes_without: vec![&three],
@@ -417,6 +432,8 @@ mod test {
                 quorum_type: QuorumType::NormalQuorum,
                 expected: Ok(Quorum {
                     count: 2,
+                    fast_minimum: 3,
+                    quorum_minimum: 2,
                     message: &msg_a,
                     nodes_with: vec![&one, &two],
                     nodes_without: vec![&three],

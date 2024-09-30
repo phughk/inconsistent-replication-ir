@@ -16,7 +16,7 @@ pub struct InconsistentReplicationServer<
     MSG: IRMessage,
 > {
     network: NET,
-    storage: Arc<STO>,
+    storage: STO,
     node_id: ID,
     view: Arc<RwLock<View<ID>>>,
     _a: PhantomData<MSG>,
@@ -68,7 +68,7 @@ impl<
         let view = storage.recover_current_view().await;
         InconsistentReplicationServer {
             network,
-            storage: Arc::new(storage),
+            storage,
             node_id,
             view: Arc::new(RwLock::new(view)),
             _a: PhantomData,
@@ -183,6 +183,13 @@ impl<
                 .await;
             (m, view)
         })
+    }
+
+    #[cfg(any(feature = "test", test))]
+    pub async fn shutdown(self) -> (N, S, I, View<I>) {
+        let view_guard = self.view.write().await;
+        let view = view_guard.to_owned();
+        (self.network, self.storage, self.node_id, view)
     }
 
     async fn do_view_change(&self, new_view: View<I>) {
