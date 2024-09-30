@@ -146,9 +146,15 @@ impl<'a> Arbitrary<'a> for LinearizableComputeOperation {
                 computed_value: None,
             })
         } else {
+            // We limit the input to prevent memory overflows
+            let wsz = u.int_in_range(1..=3)?;
+            let mut write = Vec::with_capacity(wsz as usize);
+            for _ in 0..wsz {
+                write.push(u.arbitrary()?)
+            }
             Ok(LinearizableComputeOperation::WriteOperation {
                 key: u.int_in_range(0..=MAX_KEYS)? as u64,
-                requested_value: u.arbitrary()?,
+                requested_value: write,
                 computed_value: None,
             })
         }
