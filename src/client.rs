@@ -191,7 +191,7 @@ impl<
                         failed_requests.push(node_id);
                     }
                 }
-                if !failed_requests.is_empty() {
+                if quorum.view.members.len() - failed_requests.len() < quorum.quorum_minimum {
                     panic!("What do if failed requests? Technically need to retry. Maybe panic if no f+1? Modify quorum code to include necessary info")
                 }
             }

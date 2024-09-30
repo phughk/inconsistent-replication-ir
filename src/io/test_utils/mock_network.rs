@@ -158,12 +158,23 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
 
     fn sync_finalize_consistent(
         &self,
-        _destination: I,
-        _client_id: I,
-        _sequence: u64,
-        _message: M,
+        destination: I,
+        client_id: I,
+        sequence: u64,
+        message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
-        todo!()
+        let nodes = self.nodes.clone();
+        Box::pin(async move {
+            let read_lock = nodes.read().await;
+            let node = read_lock.get(&destination).ok_or(())?;
+            match node {
+                SwitchableNode::On(node) => {
+                    let (msg, view) = node.finalize_consistent(client_id, sequence, message).await;
+                    Ok((msg, view))
+                }
+                SwitchableNode::Off(_) => Err(()),
+            }
+        })
     }
 
     fn invoke_view_change(

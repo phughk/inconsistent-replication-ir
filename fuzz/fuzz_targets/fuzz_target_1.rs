@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 
 const MAX_NODES: usize = 10;
 const MAX_CLIENTS: usize = 10;
+const MAX_KEYS: usize = 10;
 
 type KEY = u8;
 type VALUE = u8;
@@ -33,7 +34,7 @@ impl<'a> Arbitrary<'a> for TestScenario {
     }
 }
 
-#[derive(Arbitrary, Debug)]
+#[derive(Debug)]
 enum TestStep {
     /// Make an inconsistent operation
     InconsistentMessage {
@@ -51,6 +52,32 @@ enum TestStep {
     DropResponse { who: usize },
     /// Turn a node on or off
     FlipSwitch { node: usize },
+}
+
+impl<'a> Arbitrary<'a> for TestStep {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let op = u.int_in_range(0..=4)?;
+        match op {
+            0 => Ok(TestStep::InconsistentMessage {
+                client: u.int_in_range(0..=MAX_CLIENTS)?,
+                message: u.arbitrary()?,
+            }),
+            1 => Ok(TestStep::ConsistentMessage {
+                client: u.int_in_range(0..=MAX_CLIENTS)?,
+                message: u.arbitrary()?,
+            }),
+            2 => Ok(TestStep::DropRequest {
+                who: u.int_in_range(0..=MAX_NODES)?,
+            }),
+            3 => Ok(TestStep::DropResponse {
+                who: u.int_in_range(0..=MAX_NODES)?,
+            }),
+            4 => Ok(TestStep::FlipSwitch {
+                node: u.int_in_range(0..=MAX_NODES)?,
+            }),
+            _ => panic!("Unsupported arbitrary operation: {}", op),
+        }
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Arbitrary)]

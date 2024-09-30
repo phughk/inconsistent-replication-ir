@@ -19,7 +19,7 @@ You need `cargo fuzz` and rust `nightly`.
 ----
 cargo install cargo-fuzz
 cargo fuzz list
-cargo +nightly fuzz run fuzz_target_1
+cargo +nightly fuzz run fuzz_target_1 -- -rss_limit_mb=4086
 ----
 
 == Usage

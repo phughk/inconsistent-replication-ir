@@ -1,3 +1,4 @@
+use crate::MAX_KEYS;
 use arbitrary::{Arbitrary, Unstructured};
 use inconsistent_replication_ir::test_utils::MockOperationHandler;
 use std::collections::BTreeMap;
@@ -141,12 +142,12 @@ impl<'a> Arbitrary<'a> for LinearizableComputeOperation {
         let op_choice = u.int_in_range(0..=1)?;
         if op_choice == 0 {
             Ok(LinearizableComputeOperation::ReadOperation {
-                key: u.arbitrary()?,
+                key: u.int_in_range(0..=MAX_KEYS)? as u64,
                 computed_value: None,
             })
         } else {
             Ok(LinearizableComputeOperation::WriteOperation {
-                key: u.arbitrary()?,
+                key: u.int_in_range(0..=MAX_KEYS)? as u64,
                 requested_value: u.arbitrary()?,
                 computed_value: None,
             })
