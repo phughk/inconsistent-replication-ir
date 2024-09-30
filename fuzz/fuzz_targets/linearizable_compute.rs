@@ -91,10 +91,7 @@ impl LinearizableComputer {
                 key,
                 computed_value,
             } => {
-                assert!(
-                    computed_value.is_none(),
-                    "We should only execute on non-computed operations"
-                );
+                // Inconsistent operations execute twice - once for evaluation(non-persistent), once for finalize
                 let key_lock = self.data.read().unwrap();
                 match key_lock.contains_key(&key) {
                     true => {
@@ -106,7 +103,7 @@ impl LinearizableComputer {
                     }
                     false => LinearizableComputeOperation::ReadOperation {
                         key,
-                        computed_value: Some(Vec::new()),
+                        computed_value: Some(Vec::with_capacity(2)),
                     },
                 }
             }
@@ -115,24 +112,20 @@ impl LinearizableComputer {
                 requested_value,
                 computed_value,
             } => {
-                assert!(
-                    computed_value.is_none(),
-                    "We should only execute on non-computed operations"
-                );
                 let mut key_lock = self.data.write().unwrap();
                 match key_lock.contains_key(&key) {
                     true => {
                         // Noop, we have the key
                     }
                     false => {
-                        key_lock.insert(key, Arc::new(RwLock::new(Vec::new())));
+                        key_lock.insert(key, Arc::new(RwLock::new(Vec::with_capacity(2))));
                     }
                 }
                 drop(key_lock);
                 let key_lock = self.data.read().unwrap();
                 let key_entry = key_lock.get(&key).unwrap().clone();
                 let mut val_lock = key_entry.write().unwrap();
-                val_lock.extend(computed_value.unwrap_or(Vec::new()));
+                val_lock.extend(computed_value.unwrap_or(Vec::with_capacity(2)));
                 LinearizableComputeOperation::WriteOperation {
                     key,
                     requested_value,

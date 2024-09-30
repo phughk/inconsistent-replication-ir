@@ -59,7 +59,7 @@ impl<
             client_id,
             sequence: AtomicU64::new(0),
             latest_view: view,
-            additional_nodes: RwLock::new(Vec::new()),
+            additional_nodes: RwLock::new(Vec::with_capacity(2)),
             _a: PhantomData,
         }
     }
