@@ -86,7 +86,7 @@ impl<
         message: M,
         // TODO
         _highest_observed_view: Option<View<I>>,
-    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         #[cfg(any(feature = "test", test))]
         println!(
             "propose_inconsistent: {}",
@@ -106,7 +106,7 @@ impl<
                     message,
                 )
                 .await;
-            (m, view)
+            Ok((m, view))
         })
     }
 
@@ -202,4 +202,10 @@ impl<
         let old_view = self.view.write().await;
         assert!(new_view.view > old_view.view);
     }
+}
+
+#[derive(Debug)]
+pub enum IRServerError<ID: NodeID> {
+    InternalError(Box<dyn std::error::Error>),
+    Recovering(View<ID>),
 }

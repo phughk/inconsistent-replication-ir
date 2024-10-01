@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "test"))]
 pub mod test_utils;
 
-use crate::server::View;
+use crate::server::{IRServerError, View};
 use crate::types::{IRMessage, NodeID, OperationSequence};
 use std::future::Future;
 use std::pin::Pin;
@@ -16,7 +16,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         sequence: OperationSequence,
         message: M,
         highest_observed_view: Option<View<I>>,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
 
     /// Used by clients to make a consistent request to a specific node
     fn propose_consistent(
@@ -25,7 +25,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
@@ -36,7 +36,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>> + 'static>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
@@ -52,7 +52,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>> + 'static>>;
 
     /// Send a finalize message to a node
     /// This *DOES* need to be immediate, though can be batched.
@@ -62,14 +62,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
-
-    /// A client that detects a higher view will notify a node to change view
-    fn invoke_view_change(
-        &self,
-        destination: I,
-        view: View<I>,
-    ) -> Pin<Box<dyn Future<Output = Result<View<I>, ()>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
 }
 
 pub trait StorageShared<ID: NodeID> {
@@ -120,3 +113,15 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
 
 /// Provides access to persistence for the client
 pub trait IRClientStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> {}
+
+#[derive(Debug)]
+pub enum IRNetworkError<ID: NodeID> {
+    NodeUnreachable(ID),
+    IRServerError(IRServerError<ID>),
+}
+
+impl<ID: NodeID> From<IRServerError<ID>> for IRNetworkError<ID> {
+    fn from(value: IRServerError<ID>) -> Self {
+        IRNetworkError::IRServerError(value)
+    }
+}

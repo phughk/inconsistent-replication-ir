@@ -312,25 +312,4 @@ impl<
         }
         Ok(responses)
     }
-
-    /// This helper is required so that we have a consistently-sized future
-    async fn propose_inconsistent_helper(
-        &self,
-        node: ID,
-        sequence: u64,
-        message: MSG,
-        highest_observed_view: Option<View<ID>>,
-    ) -> (ID, Result<(MSG, View<ID>), ()>) {
-        let response = self
-            .network
-            .propose_inconsistent(
-                node.clone(),
-                self.client_id.clone(),
-                sequence,
-                message,
-                highest_observed_view,
-            )
-            .await;
-        (node, response)
-    }
 }

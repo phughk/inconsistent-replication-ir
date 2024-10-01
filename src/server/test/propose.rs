@@ -1,4 +1,4 @@
-use crate::server::{View, ViewState};
+use crate::server::{IRServerError, View, ViewState};
 use crate::test_utils::mock_computers::NoopComputer;
 use crate::test_utils::{FakeIRNetwork, FakeIRStorage, MockStorage, StorageMethod};
 use crate::InconsistentReplicationServer;
@@ -6,7 +6,38 @@ use std::sync::Arc;
 
 #[tokio::test]
 pub async fn inconsistent_requests_rejected_if_not_normal() {
-    todo!()
+    let network = FakeIRNetwork::<_, _, FakeIRStorage<String, String, NoopComputer<String>>>::new();
+    let members: Vec<_> = vec!["1", "2", "3"]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let storage = FakeIRStorage::new(members.clone(), NoopComputer::new());
+
+    let server = InconsistentReplicationServer::new(network, storage, "1".to_string()).await;
+
+    let resp = server
+        .propose_inconsistent("client-id".to_string(), 1, "message".to_string(), None)
+        .await;
+    match resp {
+        Ok(_) => {
+            panic!("Should fail")
+        }
+        Err(e) => match e {
+            IRServerError::Recovering(e_view) => {
+                assert_eq!(
+                    e_view,
+                    View {
+                        view: 1,
+                        members,
+                        state: ViewState::Recovery,
+                    }
+                )
+            }
+            _ => {
+                panic!("Unexpected error")
+            }
+        },
+    }
 }
 
 #[tokio::test]

@@ -172,6 +172,7 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> FakeIRStorage<I
             current_view: Arc::new(TokioRwLock::new(View {
                 view: 0,
                 members,
+                // This is stored as normal to validate the nodes always load as recovering
                 state: ViewState::Normal,
             })),
             computer_lol: computer,
