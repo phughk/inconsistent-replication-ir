@@ -4,7 +4,7 @@ mod linearizable_compute;
 
 use crate::linearizable_compute::{LinearizableComputeOperation, LinearizableComputer};
 use arbitrary::{Arbitrary, Unstructured};
-use inconsistent_replication_ir::test_utils::{MockIRNetwork, MockIRStorage};
+use inconsistent_replication_ir::test_utils::{FakeIRNetwork, FakeIRStorage};
 use inconsistent_replication_ir::types::DecideFunction;
 use inconsistent_replication_ir::{InconsistentReplicationClient, InconsistentReplicationServer};
 use libfuzzer_sys::{arbitrary, fuzz_target};
@@ -106,7 +106,7 @@ impl DecideFunction<LinearizableComputeOperation> for TestDecideFunction {
 
 fuzz_target!(|data: TestScenario| {
     // Create cluster
-    let network = MockIRNetwork::<_, _, MockIRStorage<_, _, LinearizableComputer>>::new();
+    let network = FakeIRNetwork::<_, _, FakeIRStorage<_, _, LinearizableComputer>>::new();
     let members: Vec<usize> = (0..data.nodes).collect();
     for i in 0..data.nodes {
         smol::block_on(async {
@@ -114,13 +114,15 @@ fuzz_target!(|data: TestScenario| {
                 i,
                 InconsistentReplicationServer::new(
                     network.clone(),
-                    MockIRStorage::new(members.clone(), LinearizableComputer::new()),
+                    FakeIRStorage::new(members.clone(), LinearizableComputer::new()),
                     i,
                 )
                 .await,
             );
         })
     }
+
+    // Create clients
     let mut clients = Vec::with_capacity(data.clients);
     for client_id in 0..data.clients {
         // TODO maybe no need to clone as same thread and blocking
@@ -130,7 +132,7 @@ fuzz_target!(|data: TestScenario| {
             InconsistentReplicationClient::new(
                 network_clone,
                 // The computer isn't used on the client, but it is part of the shared storage interface
-                MockIRStorage::new(members_clone, LinearizableComputer::new()),
+                FakeIRStorage::new(members_clone, LinearizableComputer::new()),
                 client_id,
             )
             .await

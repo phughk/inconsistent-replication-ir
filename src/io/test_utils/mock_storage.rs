@@ -1,185 +1,269 @@
-use crate::debug::MaybeDebug;
-use crate::io::{IRClientStorage, StorageShared};
-use crate::server::{View, ViewState};
-use crate::test_utils::mock_computers::MockOperationHandler;
-use crate::test_utils::mock_record_store::{MockRecordStore, OperationType, State};
-use crate::types::{IRMessage, NodeID};
+use crate::io::StorageShared;
+use crate::server::View;
+use crate::types::{IRMessage, NodeID, OperationSequence};
 use crate::IRStorage;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::RwLock as TokioRwLock;
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
-pub struct MockIRStorage<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> {
-    records: MockRecordStore<ID, MSG>,
-    current_view: Arc<TokioRwLock<View<ID>>>,
-    computer_lol: CPU,
+/// MockStorage tracks all the calls that happen to the storage, and provides mocked responses
+/// Tbh this should be seldom used - it's much better to access state via real implementations
+pub struct MockStorage<ID: NodeID, MSG: IRMessage> {
+    current_view: Arc<RwLock<View<ID>>>,
+    record_recover_current_view: Arc<RwLock<Vec<View<ID>>>>,
+
+    record_tentative_inconsistent_log: Arc<RwLock<Vec<(ID, OperationSequence, View<ID>, MSG)>>>,
+    matcher_record_tentative_inconsistent:
+        Arc<RwLock<Vec<Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>>>>,
+
+    promote_finalized_inconsistent_log: Arc<RwLock<Vec<(ID, OperationSequence, View<ID>, MSG)>>>,
+    matcher_promote_finalized_inconsistent:
+        Arc<RwLock<Vec<Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<()>>>>>,
+
+    record_tentative_consistent_log: Arc<RwLock<Vec<(ID, OperationSequence, View<ID>, MSG)>>>,
+    matcher_record_tentative_consistent:
+        Arc<RwLock<Vec<Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>>>>,
+
+    promote_finalized_consistent_log: Arc<RwLock<Vec<(ID, OperationSequence, View<ID>, MSG)>>>,
+    matcher_promote_finalized_consistent:
+        Arc<RwLock<Vec<Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>>>>,
 }
 
-impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> StorageShared<ID>
-    for MockIRStorage<ID, MSG, CPU>
-{
-    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>>>> {
-        let view = self.current_view.clone();
-        Box::pin(async move { view.read().await.clone() })
+impl<ID: NodeID, MSG: IRMessage> StorageShared<ID> for MockStorage<ID, MSG> {
+    fn recover_current_view(&self) -> Pin<Box<dyn Future<Output = View<ID>> + 'static>> {
+        let view = self.current_view.read().unwrap().clone();
+        let view_record = self
+            .record_recover_current_view
+            .write()
+            .unwrap()
+            .push(view.clone());
+        Box::pin(async move { view })
     }
 }
 
-impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, MSG>
-    for MockIRStorage<ID, MSG, CPU>
-{
+impl<ID: NodeID, MSG: IRMessage> IRStorage<ID, MSG> for MockStorage<ID, MSG> {
     fn record_tentative_inconsistent_and_evaluate(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
-        println!(
-            "record_tentative_inconsistent operation: {}",
-            MaybeDebug::maybe_debug(&message)
-        );
-        let records = self.records.clone();
-        let computer_lol = self.computer_lol.clone();
+        self.record_tentative_inconsistent_log
+            .write()
+            .unwrap()
+            .push((client.clone(), operation, view.clone(), message.clone()));
+        let matchers = self.matcher_record_tentative_inconsistent.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), operation).await;
-            match existing {
-                None => {
-                    // This is valid, inconsistent may not have been received
-                }
-                Some(state) => {
-                    assert!(state.view == view);
-                    assert!(state.message == message);
-                    assert!(state.operation_type == OperationType::Inconsistent);
-                    assert!(state.state == State::Tentative);
-                }
-            }
-            // TODO if finalized, should return finalized value and that it is finalized
-            records
-                .propose_tentative_inconsistent(client, operation, view, message.clone())
-                .await;
-            computer_lol.evaluate_inconsistent(message)
+            matchers
+                .read()
+                .unwrap()
+                .iter()
+                .map(|f| f(client.clone(), operation, view.clone(), message.clone()))
+                .find(|res| res.is_some())
+                .flatten()
+                .unwrap()
         })
     }
 
     fn promote_finalized_and_exec_inconsistent(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
-        println!(
-            "promote_finalized_and_exec_inconsistent: {}",
-            MaybeDebug::maybe_debug(&message)
-        );
-        let records = self.records.clone();
-        let computer = self.computer_lol.clone();
+        self.promote_finalized_inconsistent_log
+            .write()
+            .unwrap()
+            .push((client.clone(), operation, view.clone(), message.clone()));
+        let matchers = self.matcher_promote_finalized_inconsistent.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), operation).await;
-            match existing {
-                None => {
-                    // This is valid, we may have missed the inconsistent message
-                }
-                Some(state) => {
-                    assert!(state.view == view);
-                    // We do not assert message, as it may be different
-                    assert!(state.operation_type == OperationType::Inconsistent);
-                    // Maybe this is wrong, because we may receive duplicate messages
-                    assert!(state.state != State::Finalized);
-                }
-            }
-            records
-                .promote_finalized_inconsistent(client, operation, view, message.clone())
-                .await;
-            let _unused_msg = computer.exec_inconsistent(message);
+            matchers
+                .read()
+                .unwrap()
+                .iter()
+                .map(|f| f(client.clone(), operation, view.clone(), message.clone()))
+                .find(|f| f.is_some())
+                .flatten()
+                .ok_or("No matching mock for finalized inconsistent")
+                .unwrap();
         })
     }
 
     fn record_tentative_and_exec_consistent(
         &self,
         client: ID,
-        sequence: u64,
+        operation: OperationSequence,
         view: View<ID>,
-        operation: MSG,
+        message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
-        let records = self.records.clone();
-        let computer = self.computer_lol.clone();
+        self.record_tentative_consistent_log.write().unwrap().push((
+            client.clone(),
+            operation,
+            view.clone(),
+            message.clone(),
+        ));
+        let matchers = self.matcher_record_tentative_consistent.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), sequence).await;
-            match existing {
-                None => {
-                    // All good here
-                }
-                Some(state) => {
-                    assert!(state.view == view);
-                    assert!(state.operation_type == OperationType::Consistent);
-                    assert!(state.state != State::Finalized);
-                }
-            }
-            let response = computer.exec_consistent(operation.clone());
-            records
-                .propose_tentative_consistent(client, sequence, view, operation.clone())
-                .await;
-            response
+            matchers
+                .read()
+                .unwrap()
+                .iter()
+                .map(|f| f(client.clone(), operation, view.clone(), message.clone()))
+                .find(|f| f.is_some())
+                .flatten()
+                .ok_or("No matching mock for tentative consistent")
+                .unwrap()
         })
     }
 
     fn promote_finalized_and_reconcile_consistent(
         &self,
         client: ID,
-        sequence: u64,
+        operation: OperationSequence,
         view: View<ID>,
-        operation: MSG,
+        message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>> {
-        let records = self.records.clone();
-        let computer = self.computer_lol.clone();
+        self.promote_finalized_consistent_log
+            .write()
+            .unwrap()
+            .push((client.clone(), operation, view.clone(), message.clone()));
+        let matchers = self.matcher_promote_finalized_consistent.clone();
         Box::pin(async move {
-            let existing = records.find_entry(client.clone(), sequence).await;
-            match existing {
-                None => {
-                    // Valid
-                }
-                Some(state) => {
-                    assert!(state.view == view);
-                    assert!(state.operation_type == OperationType::Consistent);
-                    assert!(state.state != State::Finalized)
-                }
-            }
-            let previous = records
-                .promote_finalized_consistent_returning_previous_evaluation(
-                    client,
-                    sequence,
-                    view,
-                    operation.clone(),
-                )
-                .await;
-            computer.reconcile_consistent(previous, operation)
+            matchers
+                .read()
+                .unwrap()
+                .iter()
+                .map(|f| f(client.clone(), operation, view.clone(), message.clone()))
+                .find(|f| f.is_some())
+                .flatten()
+                .unwrap()
         })
     }
 }
 
-impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRClientStorage<ID, MSG>
-    for MockIRStorage<ID, MSG, CPU>
-{
-}
-
-impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> MockIRStorage<ID, MSG, CPU> {
-    pub fn new(members: Vec<ID>, computer: CPU) -> Self {
-        MockIRStorage {
-            records: MockRecordStore::new(),
-            current_view: Arc::new(TokioRwLock::new(View {
-                view: 0,
-                members,
-                state: ViewState::Normal,
-            })),
-            computer_lol: computer,
+impl<ID: NodeID, MSG: IRMessage> MockStorage<ID, MSG> {
+    pub fn new(current_view: View<ID>) -> MockStorage<ID, MSG> {
+        MockStorage {
+            current_view: Arc::new(RwLock::new(current_view)),
+            record_recover_current_view: Arc::new(Default::default()),
+            record_tentative_inconsistent_log: Arc::new(Default::default()),
+            matcher_record_tentative_inconsistent: Arc::new(Default::default()),
+            promote_finalized_inconsistent_log: Arc::new(Default::default()),
+            matcher_promote_finalized_inconsistent: Arc::new(Default::default()),
+            record_tentative_consistent_log: Arc::new(Default::default()),
+            matcher_record_tentative_consistent: Arc::new(Default::default()),
+            promote_finalized_consistent_log: Arc::new(Default::default()),
+            matcher_promote_finalized_consistent: Arc::new(Default::default()),
         }
     }
-
-    pub async fn set_current_view(&self, view: View<ID>) {
-        let mut lock = self.current_view.write().await;
-        *lock = view;
+    pub fn mock_record_tentative_inconsistent_and_evaluate(
+        &self,
+        matcher: Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>,
+    ) {
+        self.matcher_record_tentative_inconsistent
+            .write()
+            .unwrap()
+            .push(matcher);
     }
+
+    pub fn mock_record_tentative_consistent(
+        &self,
+        matcher: Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>,
+    ) {
+        self.matcher_record_tentative_consistent
+            .write()
+            .unwrap()
+            .push(matcher);
+    }
+
+    pub fn mock_promote_inconsistent(
+        &self,
+        matcher: Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<()>>,
+    ) {
+        self.matcher_promote_finalized_inconsistent
+            .write()
+            .unwrap()
+            .push(matcher);
+    }
+
+    pub fn mock_promote_consistent(
+        &self,
+        matcher: Box<dyn Fn(ID, OperationSequence, View<ID>, MSG) -> Option<MSG>>,
+    ) {
+        self.matcher_promote_finalized_consistent
+            .write()
+            .unwrap()
+            .push(matcher);
+    }
+
+    pub fn get_invocations_current_view(&self) -> Vec<View<ID>> {
+        self.record_recover_current_view.read().unwrap().clone()
+    }
+
+    pub fn get_invocations_record_tentative_consistent(
+        &self,
+    ) -> Vec<(ID, OperationSequence, View<ID>, MSG)> {
+        self.record_tentative_consistent_log.read().unwrap().clone()
+    }
+
+    pub fn get_invocations_record_tentative_inconsistent(
+        &self,
+    ) -> Vec<(ID, OperationSequence, View<ID>, MSG)> {
+        self.record_tentative_inconsistent_log
+            .read()
+            .unwrap()
+            .clone()
+    }
+
+    pub fn get_invocations_promote_inconsistent(
+        &self,
+    ) -> Vec<(ID, OperationSequence, View<ID>, MSG)> {
+        self.promote_finalized_inconsistent_log
+            .read()
+            .unwrap()
+            .clone()
+    }
+
+    pub fn get_invocations_promote_consistent(
+        &self,
+    ) -> Vec<(ID, OperationSequence, View<ID>, MSG)> {
+        self.promote_finalized_consistent_log
+            .read()
+            .unwrap()
+            .clone()
+    }
+
+    pub fn assert_invocations_no_calls(&self, methods: &[StorageMethod]) {
+        for method in methods {
+            match method {
+                StorageMethod::ProposeInconsistent => {
+                    assert!(
+                        self.get_invocations_record_tentative_inconsistent()
+                            == Vec::with_capacity(0)
+                    )
+                }
+                StorageMethod::ProposeConsistent => {
+                    assert!(
+                        self.get_invocations_record_tentative_consistent() == Vec::with_capacity(0)
+                    )
+                }
+                StorageMethod::FinalizeInconsistent => {
+                    assert!(self.get_invocations_promote_inconsistent() == Vec::with_capacity(0))
+                }
+                StorageMethod::FinalizeConsistent => {
+                    assert!(self.get_invocations_promote_consistent() == Vec::with_capacity(0))
+                }
+            }
+        }
+    }
+}
+
+pub enum StorageMethod {
+    ProposeInconsistent,
+    ProposeConsistent,
+    FinalizeInconsistent,
+    FinalizeConsistent,
 }

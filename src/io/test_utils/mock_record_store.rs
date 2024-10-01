@@ -1,5 +1,5 @@
 use crate::server::View;
-use crate::types::{IRMessage, NodeID};
+use crate::types::{IRMessage, NodeID, OperationSequence};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
@@ -7,7 +7,7 @@ use tokio::sync::RwLock as TokioRwLock;
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct RecordKey<ID: NodeID> {
     client: ID,
-    sequence: u64,
+    sequence: OperationSequence,
     view: View<ID>,
 }
 
@@ -32,7 +32,7 @@ pub(crate) enum OperationType {
 
 pub(crate) struct FullState<ID: NodeID, MSG: IRMessage> {
     pub(crate) client: ID,
-    pub(crate) operation: u64,
+    pub(crate) operation: OperationSequence,
     pub(crate) view: View<ID>,
     pub(crate) state: State,
     pub(crate) operation_type: OperationType,
@@ -54,7 +54,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn find_entry(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
     ) -> Option<FullState<ID, MSG>> {
         let found: Vec<FullState<ID, MSG>> = self
             .records
@@ -78,7 +78,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn propose_tentative_inconsistent(
         &self,
         client: ID,
-        sequence: u64,
+        sequence: OperationSequence,
         view: View<ID>,
         operation: MSG,
     ) {
@@ -100,7 +100,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn promote_finalized_inconsistent(
         &self,
         client: ID,
-        sequence: u64,
+        sequence: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) {
@@ -122,7 +122,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn propose_tentative_consistent(
         &self,
         client: ID,
-        sequence: u64,
+        sequence: OperationSequence,
         view: View<ID>,
         operation: MSG,
     ) {
@@ -144,7 +144,7 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
     pub(crate) async fn promote_finalized_consistent_returning_previous_evaluation(
         &self,
         client: ID,
-        sequence: u64,
+        sequence: OperationSequence,
         view: View<ID>,
         operation: MSG,
     ) -> Option<MSG> {

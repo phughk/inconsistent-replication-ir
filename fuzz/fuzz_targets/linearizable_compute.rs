@@ -1,4 +1,4 @@
-use crate::MAX_KEYS;
+use crate::{KEY, MAX_KEYS, VALUE};
 use arbitrary::{Arbitrary, Unstructured};
 use inconsistent_replication_ir::test_utils::MockOperationHandler;
 use std::collections::BTreeMap;
@@ -9,19 +9,19 @@ use std::sync::{Arc, RwLock};
 /// It accepts u64 keys and the values are Vec<u64>
 /// Then all operations are append
 pub struct LinearizableComputer {
-    data: Arc<RwLock<BTreeMap<u64, Arc<RwLock<Vec<u64>>>>>>,
+    data: Arc<RwLock<BTreeMap<KEY, Arc<RwLock<Vec<VALUE>>>>>>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum LinearizableComputeOperation {
     ReadOperation {
-        key: u64,
-        computed_value: Option<Vec<u64>>,
+        key: KEY,
+        computed_value: Option<Vec<VALUE>>,
     },
     WriteOperation {
-        key: u64,
-        requested_value: Vec<u64>,
-        computed_value: Option<Vec<u64>>,
+        key: KEY,
+        requested_value: Vec<VALUE>,
+        computed_value: Option<Vec<VALUE>>,
     },
 }
 
@@ -142,7 +142,7 @@ impl<'a> Arbitrary<'a> for LinearizableComputeOperation {
         let op_choice = u.int_in_range(0..=1)?;
         if op_choice == 0 {
             Ok(LinearizableComputeOperation::ReadOperation {
-                key: u.int_in_range(0..=MAX_KEYS)? as u64,
+                key: u.int_in_range(0..=MAX_KEYS)? as KEY,
                 computed_value: None,
             })
         } else {
@@ -153,7 +153,7 @@ impl<'a> Arbitrary<'a> for LinearizableComputeOperation {
                 write.push(u.arbitrary()?)
             }
             Ok(LinearizableComputeOperation::WriteOperation {
-                key: u.int_in_range(0..=MAX_KEYS)? as u64,
+                key: u.int_in_range(0..=MAX_KEYS)? as KEY,
                 requested_value: write,
                 computed_value: None,
             })

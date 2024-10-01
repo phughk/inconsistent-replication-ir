@@ -335,7 +335,7 @@ impl<
 #[cfg(test)]
 mod test {
     use crate::client::InconsistentReplicationClient;
-    use crate::io::test_utils::{MockIRNetwork, MockIRStorage};
+    use crate::io::test_utils::{FakeIRNetwork, FakeIRStorage};
     use crate::test_utils::mock_computers::NoopComputer;
     use crate::types::{IRMessage, NodeID};
     use crate::InconsistentReplicationServer;
@@ -343,9 +343,9 @@ mod test {
     #[tokio::test]
     async fn client_can_make_inconsistent_requests() {
         // given a cluster
-        let network = MockIRNetwork::<_, _, MockIRStorage<_, _, _>>::new();
+        let network = FakeIRNetwork::<_, _, FakeIRStorage<_, _, _>>::new();
         let members = vec![1, 2, 3];
-        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
+        let storage = FakeIRStorage::new(members.clone(), NoopComputer::new());
         mock_cluster(&network, members).await;
 
         // and a client
@@ -361,9 +361,9 @@ mod test {
     #[tokio::test]
     async fn client_fails_inconsistent_request_no_quorum() {
         // given a cluster
-        let network = MockIRNetwork::<_, _, MockIRStorage<_, _, _>>::new();
+        let network = FakeIRNetwork::<_, _, FakeIRStorage<_, _, _>>::new();
         let members = vec![1, 2, 3];
-        let storage = MockIRStorage::new(members.clone(), NoopComputer::new());
+        let storage = FakeIRStorage::new(members.clone(), NoopComputer::new());
         mock_cluster(&network, members).await;
 
         // and a client
@@ -381,7 +381,7 @@ mod test {
     }
 
     async fn mock_cluster<ID: NodeID, MSG: IRMessage>(
-        network: &MockIRNetwork<ID, MSG, MockIRStorage<ID, MSG, NoopComputer<MSG>>>,
+        network: &FakeIRNetwork<ID, MSG, FakeIRStorage<ID, MSG, NoopComputer<MSG>>>,
         nodes: Vec<ID>,
     ) {
         for node_id in &nodes {
@@ -389,7 +389,7 @@ mod test {
                 node_id.clone(),
                 InconsistentReplicationServer::new(
                     network.clone(),
-                    MockIRStorage::new(nodes.clone(), NoopComputer::new()),
+                    FakeIRStorage::new(nodes.clone(), NoopComputer::new()),
                     node_id.clone(),
                 )
                 .await,

@@ -2,7 +2,7 @@
 pub mod test_utils;
 
 use crate::server::View;
-use crate::types::{IRMessage, NodeID};
+use crate::types::{IRMessage, NodeID, OperationSequence};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -13,7 +13,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
         highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
@@ -23,7 +23,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
 
@@ -34,7 +34,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + 'static>>;
 
@@ -50,7 +50,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + 'static>>;
 
@@ -60,7 +60,7 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>> + 'static>>;
 
@@ -85,7 +85,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     fn record_tentative_inconsistent_and_evaluate(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;
@@ -94,7 +94,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     fn promote_finalized_and_exec_inconsistent(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
@@ -103,7 +103,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     fn record_tentative_and_exec_consistent(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;
@@ -112,7 +112,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     fn promote_finalized_and_reconcile_consistent(
         &self,
         client: ID,
-        operation: u64,
+        operation: OperationSequence,
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;

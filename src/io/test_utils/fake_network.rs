@@ -1,5 +1,5 @@
 use crate::server::View;
-use crate::types::{IRMessage, NodeID};
+use crate::types::{IRMessage, NodeID, OperationSequence};
 use crate::{IRNetwork, IRStorage, InconsistentReplicationServer};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -11,8 +11,8 @@ use tokio::sync::RwLock as TokioRwLock;
 type DropPacketCounter<ID> = Arc<StdRwLock<BTreeMap<ID, AtomicUsize>>>;
 
 enum SwitchableNode<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> {
-    On(InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>),
-    Off((MockIRNetwork<ID, MSG, STO>, STO, ID)),
+    On(InconsistentReplicationServer<FakeIRNetwork<ID, MSG, STO>, STO, ID, MSG>),
+    Off((FakeIRNetwork<ID, MSG, STO>, STO, ID)),
 }
 
 impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> SwitchableNode<ID, MSG, STO> {
@@ -29,7 +29,7 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> SwitchableNode<ID, MSG
     }
 }
 
-pub struct MockIRNetwork<
+pub struct FakeIRNetwork<
     ID: NodeID + 'static,
     MSG: IRMessage + 'static,
     STO: IRStorage<ID, MSG> + 'static,
@@ -39,14 +39,14 @@ pub struct MockIRNetwork<
     drop_responses: DropPacketCounter<ID>,
 }
 
-impl<ID, MSG, STO> Clone for MockIRNetwork<ID, MSG, STO>
+impl<ID, MSG, STO> Clone for FakeIRNetwork<ID, MSG, STO>
 where
     ID: NodeID,
     MSG: IRMessage,
     STO: IRStorage<ID, MSG>,
 {
     fn clone(&self) -> Self {
-        MockIRNetwork {
+        FakeIRNetwork {
             nodes: self.nodes.clone(),
             drop_requests: self.drop_requests.clone(),
             drop_responses: self.drop_responses.clone(),
@@ -54,12 +54,12 @@ where
     }
 }
 
-impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNetwork<I, M, STO> {
+impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNetwork<I, M, STO> {
     fn propose_inconsistent(
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
         highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
@@ -91,7 +91,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
         let nodes = self.nodes.clone();
@@ -117,7 +117,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
         let nodes = self.nodes.clone();
@@ -139,7 +139,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
         let nodes = self.nodes.clone();
@@ -160,7 +160,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
         &self,
         destination: I,
         client_id: I,
-        sequence: u64,
+        sequence: OperationSequence,
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), ()>>>> {
         let nodes = self.nodes.clone();
@@ -186,9 +186,9 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for MockIRNe
     }
 }
 
-impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG, STO> {
+impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> FakeIRNetwork<ID, MSG, STO> {
     pub fn new() -> Self {
-        MockIRNetwork {
+        FakeIRNetwork {
             nodes: Arc::new(TokioRwLock::new(BTreeMap::new())),
             drop_requests: Arc::new(StdRwLock::new(BTreeMap::new())),
             drop_responses: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -200,7 +200,7 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> MockIRNetwork<ID, MSG,
     pub fn register_node(
         &self,
         node_id: ID,
-        server: InconsistentReplicationServer<MockIRNetwork<ID, MSG, STO>, STO, ID, MSG>,
+        server: InconsistentReplicationServer<FakeIRNetwork<ID, MSG, STO>, STO, ID, MSG>,
     ) {
         let node = SwitchableNode::On(server);
         self.nodes.try_write().unwrap().insert(node_id, node);
