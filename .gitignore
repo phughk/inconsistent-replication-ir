@@ -34,3 +34,5 @@ Cargo.lock
 
 fuzz/artifacts
 fuzz/corpus
+tarpaulin-report.html
+

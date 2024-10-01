@@ -24,6 +24,14 @@ cargo +nightly fuzz run fuzz_target_1 -- -rss_limit_mb=4086
 
 The memory issues are more to do with libfuzz than the software itself, as re-running the cases does not cause oom.
 
+=== Coverage
+
+[source,bash]
+----
+cargo install cargo-tarpaulin
+cargo tarpaulin --out Html --workspace -e fuzz
+----
+
 == Usage
 
 Initialise the `InconsistentReplicationServer` and/or `InconsistentReplicationClient` structs with a custom `Storage` and `Network` implementation.
