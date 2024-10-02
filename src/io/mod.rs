@@ -11,32 +11,32 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     /// Used by clients to make an inconsistent request to a specific node
     fn propose_inconsistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
         highest_observed_view: Option<View<I>>,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>> + 'static>>;
 
     /// Used by clients to make a consistent request to a specific node
     fn propose_consistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>> + 'static>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
     /// together with another message
     fn async_finalize_inconsistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 
     /// Send a finalize message to a node
     /// This does not need to be immediate, for example it can be buffered and sent
@@ -48,21 +48,21 @@ pub trait IRNetwork<I: NodeID, M: IRMessage> {
     /// what type of request it was.
     fn async_finalize_consistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 
     /// Send a finalize message to a node
     /// This *DOES* need to be immediate, though can be batched.
     fn sync_finalize_consistent(
         &self,
-        destination: I,
+        destination: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>> + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>> + 'static>>;
 }
 
 pub trait StorageShared<ID: NodeID> {

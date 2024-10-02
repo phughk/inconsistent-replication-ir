@@ -6,11 +6,9 @@ use crate::server::View;
 use crate::types::{DecideFunction, IRMessage, NodeID};
 use crate::utils::{find_quorum, Quorum, QuorumType, QuorumVote};
 use crate::IRStorage;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -80,33 +78,15 @@ impl<
 
         // Initiate requests
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        let network = self.network.clone();
-        let client_id = self.client_id.clone();
-        let mut responses = self
-            .request_until_number_of_responses(
-                &nodes,
-                sequence,
-                message,
-                move |node, sequence, message, _| {
-                    Box::pin({
-                        let network = network.clone();
-                        let client_id = client_id.clone();
-                        async move {
-                            let r = network
-                                .propose_inconsistent(
-                                    node.clone(),
-                                    client_id,
-                                    sequence,
-                                    message,
-                                    None,
-                                )
-                                .await;
-                            (node, r.map_err(|_| "Failed to propose inconsistent"))
-                        }
-                    })
-                },
-            )
-            .await?;
+        let responses = self
+            .network
+            .propose_inconsistent(&nodes, self.client_id.clone(), sequence, message, None)
+            .await;
+        let responses: Vec<_> = responses
+            .into_iter()
+            .filter(|r| r.is_ok())
+            .flatten()
+            .collect();
         let quorum: Quorum<ID, MSG> =
             find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
                 node: node_id,
@@ -114,17 +94,14 @@ impl<
                 view,
             }))
             .map_err(|_| "Quorum not found")?;
-        for node_id in quorum.view.members.iter().cloned() {
-            self.network
-                .async_finalize_inconsistent(
-                    node_id,
-                    self.client_id.clone(),
-                    sequence,
-                    quorum.message.clone(),
-                )
-                .await
-                .unwrap();
-        }
+        self.network
+            .async_finalize_inconsistent(
+                &quorum.view.members,
+                self.client_id.clone(),
+                sequence,
+                quorum.message.clone(),
+            )
+            .await;
         Ok(quorum.message.clone())
     }
 
@@ -149,26 +126,14 @@ impl<
         let network = self.network.clone();
         let client_id = self.client_id.clone();
         let responses = self
-            .request_until_number_of_responses(
-                &nodes,
-                sequence,
-                message,
-                |node, sequence, message, _| {
-                    Box::pin({
-                        let network = network.clone();
-                        let client_id = client_id.clone();
-                        // Copy 🤡
-                        let sequence = sequence;
-                        async move {
-                            let res = network
-                                .propose_consistent(node.clone(), client_id, sequence, message)
-                                .await;
-                            (node, res.map_err(|_| "Failed to propose consistent"))
-                        }
-                    })
-                },
-            )
-            .await?;
+            .network
+            .propose_consistent(&nodes, client_id, sequence, message)
+            .await;
+        let responses: Vec<_> = responses
+            .into_iter()
+            .filter(|(id, r)| r.is_ok())
+            .map(|(id, r)| (id, r.unwrap()))
+            .collect();
         let quorum = find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
             node: node_id,
             message: msg,
@@ -179,53 +144,34 @@ impl<
         match quorum.quorum_type {
             QuorumType::FastQuorum => {
                 // We can do async finalize
-                let mut failed_requests = Vec::with_capacity(quorum.view.members.len());
-                for node_id in quorum.view.members.iter().cloned() {
-                    let resp = self
-                        .network
-                        .async_finalize_consistent(
-                            node_id.clone(),
-                            self.client_id.clone(),
-                            sequence,
-                            quorum.message.clone(),
-                        )
-                        .await;
-                    if resp.is_err() {
-                        failed_requests.push(node_id);
-                    }
-                }
-                if quorum.view.members.len() - failed_requests.len() < quorum.quorum_minimum {
-                    panic!("What do if failed requests? Technically need to retry. Maybe panic if no f+1? Modify quorum code to include necessary info")
-                }
+                self.network
+                    .async_finalize_consistent(
+                        &quorum.view.members,
+                        self.client_id.clone(),
+                        sequence,
+                        quorum.message,
+                    )
+                    .await;
             }
             QuorumType::NormalQuorum => {
                 // TODO This is actually incorrect, we should always invoke decide if FastQuorum
                 // cannot be obtained
 
                 let responses = self
-                    .request_until_number_of_responses(
+                    .network
+                    .sync_finalize_consistent(
                         &quorum.view.members,
+                        self.client_id.clone(),
                         sequence,
-                        quorum.message.clone(),
-                        |node, sequence, message, view| {
-                            Box::pin({
-                                let network = network.clone();
-                                let client_id = client_id.clone();
-                                async move {
-                                    let res = network
-                                        .sync_finalize_consistent(
-                                            node.clone(),
-                                            client_id,
-                                            sequence,
-                                            message,
-                                        )
-                                        .await;
-                                    (node, res.map_err(|_| "Failed to sync finalize consistent"))
-                                }
-                            })
-                        },
+                        quorum.message,
                     )
-                    .await?;
+                    .await;
+                let responses: Vec<_> = responses
+                    .into_iter()
+                    .filter(|(i, r)| r.is_ok())
+                    .map(|(i, r)| (i, r.unwrap()))
+                    .collect();
+
                 let _quorum =
                     find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
                         node: node_id,
@@ -273,43 +219,5 @@ impl<
             true => Err(highest),
             false => Ok(highest),
         }
-    }
-
-    async fn request_until_number_of_responses<
-        F: Fn(
-            ID,
-            u64,
-            MSG,
-            Option<View<ID>>,
-        ) -> Pin<Box<dyn Future<Output = (ID, Result<(MSG, View<ID>), &'static str>)>>>,
-    >(
-        &self,
-        nodes: &[ID],
-        sequence: u64,
-        message: MSG,
-        request: F,
-    ) -> Result<Vec<(ID, (MSG, View<ID>))>, &'static str> {
-        let mut requests = FuturesUnordered::new();
-        for node in nodes {
-            requests.push(request(node.clone(), sequence, message.clone(), None));
-        }
-        let mut responses = Vec::with_capacity(requests.len());
-
-        let mut attempts = 0;
-        // TODO remove the max attempts - the algo should not be handling network failures. The network layer does retries.
-        while responses.len() < nodes.len() {
-            match requests.next().await {
-                Some((node, Ok(response))) => responses.push((node, response)),
-                Some((node, Err(_e))) => {
-                    // Retry the request
-                    if attempts < MAX_ATTEMPTS {
-                        attempts += 1;
-                        requests.push(request(node, sequence, message.clone(), None));
-                    }
-                }
-                None => break,
-            }
-        }
-        Ok(responses)
     }
 }
