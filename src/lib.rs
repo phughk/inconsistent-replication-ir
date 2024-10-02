@@ -1,4 +1,6 @@
 #![feature(specialization)]
+#![feature(async_iterator)]
+
 mod client;
 pub(crate) mod debug;
 mod io;

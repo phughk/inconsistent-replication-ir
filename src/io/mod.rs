@@ -1,8 +1,8 @@
 #[cfg(any(test, feature = "test"))]
 pub mod test_utils;
 
-use crate::server::{IRServerError, View};
-use crate::types::{IRMessage, NodeID, OperationSequence};
+use crate::server::{IROperation, IRServerError, View};
+use crate::types::{AsyncIterator, IRMessage, NodeID, OperationSequence};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -109,6 +109,24 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
         view: View<ID>,
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;
+
+    fn track_view_operation(
+        &self,
+        node_id: ID,
+        view: View<ID>,
+        operation: IROperation<ID, MSG>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+    fn full_records_received(
+        &self,
+        view: View<ID>,
+    ) -> Pin<Box<dyn Future<Output = Vec<ID>> + 'static>>;
+
+    fn get_view_record_operations(
+        &self,
+        node: ID,
+        view: View<ID>,
+    ) -> impl AsyncIterator<Item = IROperation<ID, MSG>>;
 }
 
 /// Provides access to persistence for the client

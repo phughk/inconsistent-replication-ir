@@ -3,7 +3,8 @@ mod test;
 
 use crate::debug::MaybeDebug;
 use crate::io::{IRNetwork, IRStorage};
-use crate::types::{IRMessage, NodeID, OperationSequence};
+use crate::types::{AsyncIterator, IRMessage, NodeID, OperationSequence};
+use crate::utils::f;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -199,6 +200,35 @@ impl<
         })
     }
 
+    /// Invoked when another node in the cluster is sending its operations.
+    /// The actual implementation includes self records, so you can do optimisations behind
+    /// the scenes, such as passively uploading, or tracking which operations already exist on
+    /// the leader node (this node).
+    pub async fn process_incoming_operations<ITER: AsyncIterator<Item = IROperation<I, M>>>(
+        &self,
+        from_who: I,
+        view: View<I>,
+        operations: ITER,
+    ) {
+        while let Some(operation) = operations.next().await {
+            self.storage
+                .track_view_operation(from_who.clone(), view.clone(), operation)
+                .await;
+        }
+        let view = self.view.read().await;
+        let full_records = self.storage.full_records_received(view.clone()).await;
+        // if we have f+1 full records we can start merge
+        if full_records.len() >= f(view.members.len()).unwrap() + 1 {
+            self.merge(full_records, view.clone()).await;
+        }
+    }
+
+    async fn merge(&self, full_record_members: Vec<I>, view: View<I>) {
+        for node in full_record_members {
+            self.storage.get_view_record_operations(node, view.clone());
+        }
+    }
+
     /// This method should be run in a loop from within the server, as it handles recovery etc
     pub async fn perform_maintenance(&self) {}
 
@@ -214,4 +244,27 @@ impl<
 pub enum IRServerError<ID: NodeID> {
     InternalError(Box<dyn std::error::Error>),
     Recovering(View<ID>),
+}
+
+pub enum IROperation<ID: NodeID, MSG: IRMessage> {
+    InconsistentPropose {
+        client: ID,
+        sequence: OperationSequence,
+        message: MSG,
+    },
+    InconsistentFinalize {
+        client: ID,
+        sequence: OperationSequence,
+        message: MSG,
+    },
+    ConsistentPropose {
+        client: ID,
+        sequence: OperationSequence,
+        message: MSG,
+    },
+    ConsistentFinalize {
+        client: ID,
+        sequence: OperationSequence,
+        message: MSG,
+    },
 }
