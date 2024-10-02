@@ -84,8 +84,8 @@ impl<
             .await;
         let responses: Vec<_> = responses
             .into_iter()
-            .filter(|r| r.is_ok())
-            .flatten()
+            .filter(|(i, r)| r.is_ok())
+            .map(|(i, r)| (i, r.unwrap()))
             .collect();
         let quorum: Quorum<ID, MSG> =
             find_quorum(responses.iter().map(|(node_id, (msg, view))| QuorumVote {
@@ -123,7 +123,6 @@ impl<
 
         // Initiate requests
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        let network = self.network.clone();
         let client_id = self.client_id.clone();
         let responses = self
             .network
@@ -149,7 +148,7 @@ impl<
                         &quorum.view.members,
                         self.client_id.clone(),
                         sequence,
-                        quorum.message,
+                        quorum.message.clone(),
                     )
                     .await;
             }
@@ -163,7 +162,7 @@ impl<
                         &quorum.view.members,
                         self.client_id.clone(),
                         sequence,
-                        quorum.message,
+                        quorum.message.clone(),
                     )
                     .await;
                 let responses: Vec<_> = responses
@@ -195,29 +194,5 @@ impl<
     pub async fn add_nodes_to_probe(&self, nodes: Vec<ID>) {
         let mut additional_nodes = self.additional_nodes.write().await;
         additional_nodes.extend(nodes);
-    }
-
-    /// Given an iterable of views, and a provided expected view
-    /// Return Ok if all views match (with the expected as value)
-    /// Return Err if they don't match (with latest as value)
-    fn validate_view<'a, I: IntoIterator<Item = &'a View<ID>>>(
-        views: I,
-        expected: Option<&'a View<ID>>,
-    ) -> Result<&'a View<ID>, &'a View<ID>> {
-        let mut iter = views.into_iter();
-        let mut highest = expected.or(iter.next()).unwrap();
-        let mut failed = false;
-        while let Some(view) = iter.next() {
-            if view.view > highest.view {
-                highest = view;
-                failed = true;
-            } else if view.view < highest.view {
-                failed = true;
-            }
-        }
-        match failed {
-            true => Err(highest),
-            false => Ok(highest),
-        }
     }
 }

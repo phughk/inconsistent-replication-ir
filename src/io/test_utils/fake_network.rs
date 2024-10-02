@@ -58,100 +58,159 @@ where
 impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNetwork<I, M, STO> {
     fn propose_inconsistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
         highest_observed_view: Option<View<I>>,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>>>> {
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
+        let destinations: Vec<I> = destinations.iter().cloned().collect();
         Box::pin(async move {
             let rl = nodes.read().await;
-            let node = rl.get(&destination).unwrap();
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+            let mut responses = Vec::with_capacity(destinations.len());
+            for destination in &destinations {
+                let node = rl.get(destination).unwrap();
+                match node {
+                    SwitchableNode::On(node) => {
+                        if Self::should_drop(drop_requests.clone(), &destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        let msg = node
+                            .propose_inconsistent(
+                                client_id.clone(),
+                                sequence,
+                                message.clone(),
+                                highest_observed_view.clone(),
+                            )
+                            .await;
+                        if Self::should_drop(drop_responses.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        responses.push((destination.clone(), msg.map_err(|e| e.into())));
                     }
-                    let msg = node
-                        .propose_inconsistent(client_id, sequence, message, highest_observed_view)
-                        .await;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+                    SwitchableNode::Off(_) => {
+                        responses.push((
+                            destination.clone(),
+                            Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                        ));
                     }
-                    Ok(msg?)
                 }
-                SwitchableNode::Off(_) => return Err(IRNetworkError::NodeUnreachable(destination)),
             }
+            responses
         })
     }
 
     fn propose_consistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>>>> {
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
+        let destinations: Vec<I> = destinations.iter().cloned().collect();
         Box::pin(async move {
             let read_lock = nodes.read().await;
-            let node = read_lock
-                .get(&destination)
-                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+            let mut responses = Vec::with_capacity(destinations.len());
+            for destination in &destinations {
+                let node = read_lock
+                    .get(&destination)
+                    .ok_or(IRNetworkError::NodeUnreachable(destination.clone()));
+                match node {
+                    Ok(SwitchableNode::On(node)) => {
+                        if Self::should_drop(drop_requests.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        let resp = node
+                            .propose_consistent(client_id.clone(), sequence, message.clone())
+                            .await;
+                        if Self::should_drop(drop_responses.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        responses.push((destination.clone(), resp.map_err(|e| e.into())));
                     }
-                    let (msg, view) = node
-                        .propose_consistent(client_id, sequence, message)
-                        .await?;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
-                    }
-                    Ok((msg, view))
+                    Ok(SwitchableNode::Off(_)) => responses.push((
+                        destination.clone(),
+                        Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                    )),
+                    Err(e) => responses.push((destination.clone(), Err(e))),
                 }
-                SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
             }
+            responses
         })
     }
 
     fn async_finalize_inconsistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>>>> {
+    ) -> Pin<Box<dyn Future<Output = ()>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
+        let destinations: Vec<I> = destinations.iter().cloned().collect();
         Box::pin(async move {
             let read_lock = nodes.read().await;
-            let node = read_lock
-                .get(&destination)
-                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+            // TODO unnecessary, because function is async
+            let mut responses = Vec::with_capacity(destinations.len());
+            for destination in &destinations {
+                let node = read_lock
+                    .get(&destination)
+                    .ok_or(IRNetworkError::NodeUnreachable(destination.clone()));
+                match node {
+                    Ok(SwitchableNode::On(node)) => {
+                        if Self::should_drop(drop_requests.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        let resp = node
+                            .finalize_inconsistent(client_id.clone(), sequence, message.clone())
+                            .await;
+                        if Self::should_drop(drop_responses.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        responses.push((destination.clone(), resp.map_err(|e| e.into())));
                     }
-                    let (_msg, _view) = node
-                        .finalize_inconsistent(client_id, sequence, message)
-                        .await?;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+                    Ok(SwitchableNode::Off(_)) => {
+                        // Noop
+                        responses.push((
+                            destination.clone(),
+                            Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                        ));
                     }
-                    Ok(())
-                }
-                SwitchableNode::Off(_) => {
-                    // Noop
-                    Ok(())
+                    Err(e) => {
+                        responses.push((destination.clone(), Err(e)));
+                    }
                 }
             }
         })
@@ -159,67 +218,87 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
 
     fn async_finalize_consistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(), IRNetworkError<I>>>>> {
+    ) -> Pin<Box<dyn Future<Output = ()>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
+        let destinations: Vec<I> = destinations.iter().cloned().collect();
         Box::pin(async move {
             let read_lock = nodes.read().await;
-            let node = read_lock
-                .get(&destination)
-                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+            for destination in destinations {
+                let node = read_lock
+                    .get(&destination)
+                    .ok_or(IRNetworkError::NodeUnreachable(destination.clone()));
+                match node {
+                    Ok(SwitchableNode::On(node)) => {
+                        if Self::should_drop(drop_requests.clone(), &destination) {
+                            continue;
+                        }
+                        let resp = node
+                            .finalize_consistent(client_id.clone(), sequence, message.clone())
+                            .await;
+                        if Self::should_drop(drop_responses.clone(), &destination) {
+                            continue;
+                        }
                     }
-                    let (_msg, _view) = node
-                        .finalize_consistent(client_id, sequence, message)
-                        .await?;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
-                    }
-                    Ok(())
+                    Ok(SwitchableNode::Off(_)) => continue,
+                    Err(_) => continue,
                 }
-                SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
             }
         })
     }
 
     fn sync_finalize_consistent(
         &self,
-        destination: I,
+        destinations: &[I],
         client_id: I,
         sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>>>> {
+    ) -> Pin<Box<dyn Future<Output = Vec<(I, Result<(M, View<I>), IRNetworkError<I>>)>>>> {
         let nodes = self.nodes.clone();
         let drop_requests = self.drop_requests.clone();
         let drop_responses = self.drop_responses.clone();
+        let destinations: Vec<I> = destinations.iter().cloned().collect();
         Box::pin(async move {
             let read_lock = nodes.read().await;
-            let node = read_lock
-                .get(&destination)
-                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
+            let mut responses = Vec::with_capacity(destinations.len());
+            for destination in &destinations {
+                let node = read_lock
+                    .get(&destination)
+                    .ok_or(IRNetworkError::NodeUnreachable(destination.clone()));
+                match node {
+                    Ok(SwitchableNode::On(node)) => {
+                        if Self::should_drop(drop_requests.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        let resp = node
+                            .finalize_consistent(client_id.clone(), sequence, message.clone())
+                            .await;
+                        if Self::should_drop(drop_responses.clone(), destination) {
+                            responses.push((
+                                destination.clone(),
+                                Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                            ));
+                            continue;
+                        }
+                        responses.push((destination.clone(), resp.map_err(|e| e.into())));
                     }
-                    let (msg, view) = node
-                        .finalize_consistent(client_id, sequence, message)
-                        .await?;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
-                    }
-                    Ok((msg, view))
+                    Ok(SwitchableNode::Off(_)) => responses.push((
+                        destination.clone(),
+                        Err(IRNetworkError::NodeUnreachable(destination.clone())),
+                    )),
+                    Err(e) => responses.push((destination.clone(), Err(e))),
                 }
-                SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
             }
+            responses
         })
     }
 }
