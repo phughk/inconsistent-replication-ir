@@ -88,6 +88,39 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
         })
     }
 
+    fn propose_consistent(
+        &self,
+        destination: I,
+        client_id: I,
+        sequence: OperationSequence,
+        message: M,
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>>>> {
+        let nodes = self.nodes.clone();
+        let drop_requests = self.drop_requests.clone();
+        let drop_responses = self.drop_responses.clone();
+        Box::pin(async move {
+            let read_lock = nodes.read().await;
+            let node = read_lock
+                .get(&destination)
+                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
+            match node {
+                SwitchableNode::On(node) => {
+                    if Self::should_drop(drop_requests, &destination) {
+                        return Err(IRNetworkError::NodeUnreachable(destination));
+                    }
+                    let (msg, view) = node
+                        .propose_consistent(client_id, sequence, message)
+                        .await?;
+                    if Self::should_drop(drop_responses, &destination) {
+                        return Err(IRNetworkError::NodeUnreachable(destination));
+                    }
+                    Ok((msg, view))
+                }
+                SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
+            }
+        })
+    }
+
     fn async_finalize_inconsistent(
         &self,
         destination: I,
@@ -110,7 +143,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                     }
                     let (_msg, _view) = node
                         .finalize_inconsistent(client_id, sequence, message)
-                        .await;
+                        .await?;
                     if Self::should_drop(drop_responses, &destination) {
                         return Err(IRNetworkError::NodeUnreachable(destination));
                     }
@@ -144,43 +177,13 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                     if Self::should_drop(drop_requests, &destination) {
                         return Err(IRNetworkError::NodeUnreachable(destination));
                     }
-                    let (_msg, _view) =
-                        node.finalize_consistent(client_id, sequence, message).await;
+                    let (_msg, _view) = node
+                        .finalize_consistent(client_id, sequence, message)
+                        .await?;
                     if Self::should_drop(drop_responses, &destination) {
                         return Err(IRNetworkError::NodeUnreachable(destination));
                     }
                     Ok(())
-                }
-                SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
-            }
-        })
-    }
-
-    fn propose_consistent(
-        &self,
-        destination: I,
-        client_id: I,
-        sequence: OperationSequence,
-        message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRNetworkError<I>>>>> {
-        let nodes = self.nodes.clone();
-        let drop_requests = self.drop_requests.clone();
-        let drop_responses = self.drop_responses.clone();
-        Box::pin(async move {
-            let read_lock = nodes.read().await;
-            let node = read_lock
-                .get(&destination)
-                .ok_or(IRNetworkError::NodeUnreachable(destination.clone()))?;
-            match node {
-                SwitchableNode::On(node) => {
-                    if Self::should_drop(drop_requests, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
-                    }
-                    let (msg, view) = node.propose_consistent(client_id, sequence, message).await;
-                    if Self::should_drop(drop_responses, &destination) {
-                        return Err(IRNetworkError::NodeUnreachable(destination));
-                    }
-                    Ok((msg, view))
                 }
                 SwitchableNode::Off(_) => Err(IRNetworkError::NodeUnreachable(destination)),
             }
@@ -207,7 +210,9 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                     if Self::should_drop(drop_requests, &destination) {
                         return Err(IRNetworkError::NodeUnreachable(destination));
                     }
-                    let (msg, view) = node.finalize_consistent(client_id, sequence, message).await;
+                    let (msg, view) = node
+                        .finalize_consistent(client_id, sequence, message)
+                        .await?;
                     if Self::should_drop(drop_responses, &destination) {
                         return Err(IRNetworkError::NodeUnreachable(destination));
                     }

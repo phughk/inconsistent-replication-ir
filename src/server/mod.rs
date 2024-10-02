@@ -116,7 +116,7 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         #[cfg(any(feature = "test", test))]
         println!(
             "finalize_inconsistent: {}",
@@ -136,7 +136,7 @@ impl<
                     message.clone(),
                 )
                 .await;
-            (message, view)
+            Ok((message, view))
         })
     }
 
@@ -146,7 +146,7 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         let view = self.view.clone();
         let storage = self.storage.clone();
         Box::pin(async move {
@@ -161,7 +161,7 @@ impl<
                     message,
                 )
                 .await;
-            (resolved_message, view)
+            Ok((resolved_message, view))
         })
     }
 
@@ -171,7 +171,7 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = (M, View<I>)>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         let view = self.view.clone();
         let storage = self.storage.clone();
         Box::pin(async move {
@@ -186,21 +186,18 @@ impl<
                     message,
                 )
                 .await;
-            (m, view)
+            Ok((m, view))
         })
     }
+
+    /// This method should be run in a loop from within the server, as it handles recovery etc
+    pub async fn perform_maintenance(&self) {}
 
     #[cfg(any(feature = "test", test))]
     pub async fn shutdown(self) -> (N, S, I, View<I>) {
         let view_guard = self.view.write().await;
         let view = view_guard.to_owned();
         (self.network, self.storage, self.node_id, view)
-    }
-
-    async fn do_view_change(&self, new_view: View<I>) {
-        assert_eq!(new_view.state, ViewState::ViewChanging);
-        let old_view = self.view.write().await;
-        assert!(new_view.view > old_view.view);
     }
 }
 
