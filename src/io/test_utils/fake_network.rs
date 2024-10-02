@@ -139,7 +139,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                             continue;
                         }
                         let resp = node
-                            .propose_consistent(client_id.clone(), sequence, message.clone())
+                            .propose_consistent(client_id.clone(), sequence, message.clone(), None)
                             .await;
                         if Self::should_drop(drop_responses.clone(), destination) {
                             responses.push((
@@ -190,7 +190,12 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                             continue;
                         }
                         let resp = node
-                            .finalize_inconsistent(client_id.clone(), sequence, message.clone())
+                            .finalize_inconsistent(
+                                client_id.clone(),
+                                sequence,
+                                message.clone(),
+                                None,
+                            )
                             .await;
                         if Self::should_drop(drop_responses.clone(), destination) {
                             responses.push((
@@ -239,7 +244,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                             continue;
                         }
                         let resp = node
-                            .finalize_consistent(client_id.clone(), sequence, message.clone())
+                            .finalize_consistent(client_id.clone(), sequence, message.clone(), None)
                             .await;
                         if Self::should_drop(drop_responses.clone(), &destination) {
                             continue;
@@ -280,7 +285,7 @@ impl<I: NodeID, M: IRMessage, STO: IRStorage<I, M>> IRNetwork<I, M> for FakeIRNe
                             continue;
                         }
                         let resp = node
-                            .finalize_consistent(client_id.clone(), sequence, message.clone())
+                            .finalize_consistent(client_id.clone(), sequence, message.clone(), None)
                             .await;
                         if Self::should_drop(drop_responses.clone(), destination) {
                             responses.push((

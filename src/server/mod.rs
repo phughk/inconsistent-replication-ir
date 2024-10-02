@@ -117,6 +117,8 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
+        // TODO
+        _highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         #[cfg(any(feature = "test", test))]
         println!(
@@ -147,6 +149,8 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
+        // TODO
+        _highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         let view = self.view.clone();
         let storage = self.storage.clone();
@@ -174,6 +178,8 @@ impl<
         client_id: I,
         operation_sequence: OperationSequence,
         message: M,
+        // TODO
+        _highest_observed_view: Option<View<I>>,
     ) -> Pin<Box<dyn Future<Output = Result<(M, View<I>), IRServerError<I>>>>> {
         let view = self.view.clone();
         let storage = self.storage.clone();

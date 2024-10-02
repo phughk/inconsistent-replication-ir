@@ -4,7 +4,7 @@ use crate::test_utils::{FakeIRNetwork, FakeIRStorage, MockStorage, StorageMethod
 use crate::InconsistentReplicationServer;
 
 #[tokio::test]
-pub async fn propose_rejected_if_not_normal() {
+pub async fn propose_rejected_if_recovering() {
     let server = InconsistentReplicationServer::new(
         FakeIRNetwork::<String, String, FakeIRStorage<_, _, NoopComputer<_>>>::new(),
         FakeIRStorage::new(
@@ -16,7 +16,7 @@ pub async fn propose_rejected_if_not_normal() {
     .await;
 
     let resp = server
-        .propose_consistent("client-id".to_string(), 1, "message".to_string())
+        .propose_consistent("client-id".to_string(), 1, "message".to_string(), None)
         .await;
 
     match resp {
@@ -36,7 +36,17 @@ pub async fn propose_rejected_if_not_normal() {
 }
 
 #[tokio::test]
-pub async fn finalise_rejected_if_not_normal() {
+pub async fn finalise_rejected_if_recovering() {
+    todo!()
+}
+
+#[tokio::test]
+pub async fn propose_rejected_if_changing_view() {
+    todo!()
+}
+
+#[tokio::test]
+pub async fn finalise_rejected_if_changing_view() {
     todo!()
 }
 
@@ -70,7 +80,7 @@ pub async fn propose_consistent() {
 
     // when
     let val = server
-        .propose_consistent("client-id".to_string(), 3, String::from("msg"))
+        .propose_consistent("client-id".to_string(), 3, String::from("msg"), None)
         .await;
 
     // then only necessary calls
