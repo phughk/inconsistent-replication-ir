@@ -1,3 +1,3 @@
-mod finalize;
+mod consistent;
+mod inconsistent;
 mod on_init;
-mod propose;

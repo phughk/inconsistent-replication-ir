@@ -2,17 +2,12 @@ use crate::server::{View, ViewState};
 use crate::test_utils::mock_computers::NoopComputer;
 use crate::test_utils::{FakeIRNetwork, FakeIRStorage};
 use crate::InconsistentReplicationServer;
-use std::sync::Arc;
 
 #[tokio::test]
 pub async fn recovers_view_from_storage_and_goes_into_recovery() {
     // when
-    let network = FakeIRNetwork::<Arc<String>, Arc<String>, FakeIRStorage<_, _, _>>::new();
-    let members = vec![
-        Arc::new("1".to_string()),
-        Arc::new("2".to_string()),
-        Arc::new("3".to_string()),
-    ];
+    let network = FakeIRNetwork::<String, String, FakeIRStorage<_, _, _>>::new();
+    let members = vec!["1".to_string(), "2".to_string(), "3".to_string()];
     let storage = FakeIRStorage::new(members.clone(), NoopComputer::new());
     storage
         .set_current_view(View {
@@ -23,9 +18,8 @@ pub async fn recovers_view_from_storage_and_goes_into_recovery() {
         .await;
 
     let server =
-        InconsistentReplicationServer::new(network.clone(), storage, Arc::new("1".to_string()))
-            .await;
-    network.register_node(Arc::new("1".to_string()), server.clone());
+        InconsistentReplicationServer::new(network.clone(), storage, "1".to_string()).await;
+    network.register_node("1".to_string(), server.clone());
     let lock = server.view.read().await;
     assert_eq!(
         &*lock,

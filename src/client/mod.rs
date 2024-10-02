@@ -191,7 +191,7 @@ impl<
     /// If the nodes respond with a normal view (i.e. caught up), a view change will be initiated.
     ///
     /// The list of additional nodes is cleared on view change.
-    pub async fn add_nodes_to_probe(&self, nodes: Vec<ID>) {
+    pub async fn do_view_change(&self, nodes: Vec<ID>) {
         let mut additional_nodes = self.additional_nodes.write().await;
         additional_nodes.extend(nodes);
     }

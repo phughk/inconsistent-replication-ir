@@ -68,7 +68,8 @@ impl<
     > InconsistentReplicationServer<N, S, I, M>
 {
     pub async fn new(network: N, storage: S, node_id: I) -> Self {
-        let view = storage.recover_current_view().await;
+        let mut view = storage.recover_current_view().await;
+        view.state = ViewState::Recovery;
         InconsistentReplicationServer {
             network,
             storage,
@@ -152,7 +153,9 @@ impl<
         Box::pin(async move {
             let view_lock = view.read().await;
             let view = view_lock.clone();
-            assert_eq!(view.state, ViewState::Normal);
+            if view.state == ViewState::Recovery {
+                return Err(IRServerError::Recovering(view));
+            }
             let resolved_message = storage
                 .record_tentative_and_exec_consistent(
                     client_id,
