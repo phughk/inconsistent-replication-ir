@@ -2,7 +2,7 @@ use crate::debug::MaybeDebug;
 use crate::io::{IRClientStorage, StorageShared};
 use crate::server::{IROperation, View, ViewState};
 use crate::test_utils::mock_computers::MockOperationHandler;
-use crate::test_utils::mock_record_store::{MockRecordStore, OperationType, State};
+use crate::test_utils::mock_record_store::{FullState, MockRecordStore};
 use crate::types::{AsyncIterator, IRMessage, NodeID, OperationSequence};
 use crate::IRStorage;
 use std::collections::BTreeMap;
@@ -56,9 +56,12 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                 }
                 Some(state) => {
                     assert!(state.view == view);
-                    assert!(state.message == message);
-                    assert!(state.operation_type == OperationType::Inconsistent);
-                    assert!(state.state == State::Tentative);
+                    assert!(state.ir_operation.message() == &message);
+                    #[cfg(any(feature = "test", debug_assertions, test))]
+                    match state.ir_operation {
+                        IROperation::InconsistentPropose { .. } => {}
+                        _ => panic!("invalid type"),
+                    }
                 }
             }
             // TODO if finalized, should return finalized value and that it is finalized
@@ -89,11 +92,12 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                     // This is valid, we may have missed the inconsistent message
                 }
                 Some(state) => {
-                    assert!(state.view == view);
+                    assert_eq!(state.view, view);
                     // We do not assert message, as it may be different
-                    assert!(state.operation_type == OperationType::Inconsistent);
-                    // Maybe this is wrong, because we may receive duplicate messages
-                    assert!(state.state != State::Finalized);
+                    match state.ir_operation {
+                        IROperation::InconsistentFinalize { .. } => {}
+                        _ => panic!("invalid type"),
+                    }
                 }
             }
             records
@@ -120,8 +124,10 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                 }
                 Some(state) => {
                     assert!(state.view == view);
-                    assert!(state.operation_type == OperationType::Consistent);
-                    assert!(state.state != State::Finalized);
+                    match state.ir_operation {
+                        IROperation::ConsistentFinalize { .. } => {}
+                        _ => panic!("invalid type"),
+                    }
                 }
             }
             let response = computer.exec_consistent(operation.clone());
@@ -149,8 +155,10 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                 }
                 Some(state) => {
                     assert!(state.view == view);
-                    assert!(state.operation_type == OperationType::Consistent);
-                    assert!(state.state != State::Finalized)
+                    match state.ir_operation {
+                        IROperation::ConsistentFinalize { .. } => {}
+                        _ => panic!("invalid type"),
+                    }
                 }
             }
             let previous = records
@@ -165,7 +173,7 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         })
     }
 
-    fn track_view_operation(
+    fn add_peer_view_change_operation(
         &self,
         node_id: ID,
         view: View<ID>,
@@ -174,13 +182,13 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         Box::pin(async move {
             let mut wl = self.received_record_logs.write().unwrap();
             let record_store = wl
-                .entry((view, node_id))
+                .entry((view.clone(), node_id))
                 .or_insert_with(|| MockRecordStore::new());
             let found = record_store
                 .find_entry(operation.client().clone(), operation.sequence().clone())
                 .await;
             match (operation, found) {
-                // Inconsistent finalized resolves to consistent
+                // Inconsistent finalize is always recorded
                 (
                     IROperation::InconsistentFinalize {
                         client,
@@ -188,7 +196,12 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                         message,
                     },
                     _,
-                ) => {}
+                ) => {
+                    record_store
+                        .promote_finalized_inconsistent(client, sequence, view, message)
+                        .await;
+                }
+                // Inconsistent propose is recorded if we don't have it
                 (
                     IROperation::InconsistentPropose {
                         client,
@@ -196,9 +209,22 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                         message,
                     },
                     None,
-                ) => {}
-                (_, Some(f)) => {}
-                // Consistent
+                ) => {
+                    record_store
+                        .propose_tentative_inconsistent(client, sequence, view, message)
+                        .await;
+                }
+                // If we have a record then we keep it otherwise
+                (
+                    IROperation::InconsistentPropose { .. },
+                    Some(FullState {
+                        ir_operation: IROperation::InconsistentPropose { .. },
+                        view,
+                    }),
+                ) => {
+                    // Noop
+                }
+                // Consistent finalize is always recorded
                 (
                     IROperation::ConsistentFinalize {
                         client,
@@ -206,14 +232,39 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
                         message,
                     },
                     _,
-                ) => {}
-                // All other cases are panic
-                (_, _) => {}
+                ) => {
+                    record_store
+                        .propose_tentative_consistent(client, sequence, view, message)
+                        .await;
+                }
+                // Consistent propose is recorded if we don't have it
+                (
+                    IROperation::ConsistentPropose {
+                        client,
+                        sequence,
+                        message,
+                    },
+                    None,
+                ) => {
+                    record_store
+                        .propose_tentative_consistent(client, sequence, view, message)
+                        .await;
+                }
+                // If we have a consistent record then we keep it
+                (
+                    IROperation::ConsistentPropose { .. },
+                    Some(FullState {
+                        ir_operation: IROperation::ConsistentPropose { .. },
+                        view,
+                    }),
+                ) => {
+                    // Noop
+                }
             }
         })
     }
 
-    fn full_records_received(
+    fn get_peers_with_full_records(
         &self,
         view: View<ID>,
     ) -> Pin<Box<dyn Future<Output = Vec<ID>> + 'static>> {
@@ -234,6 +285,17 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
         client: ID,
         operation_sequence: OperationSequence,
     ) -> Option<IROperation<ID, MSG>> {
+        todo!()
+    }
+
+    fn record_main_operation(&self, view: View<ID>, operation: IROperation<ID, MSG>) {
+        todo!()
+    }
+
+    fn get_unresolved_record_operations(
+        &self,
+        view: View<ID>,
+    ) -> Pin<Box<dyn Future<Output = impl AsyncIterator<Item = Vec<IROperation<ID, MSG>>>>>> {
         todo!()
     }
 }

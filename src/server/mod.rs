@@ -4,7 +4,8 @@ mod test;
 use crate::debug::MaybeDebug;
 use crate::io::{IRNetwork, IRStorage};
 use crate::types::{AsyncIterator, IRMessage, NodeID, OperationSequence};
-use crate::utils::f;
+use crate::utils::{f, find_quorum, QuorumVote};
+use futures::StreamExt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -212,11 +213,11 @@ impl<
     ) {
         while let Some(operation) = operations.next().await {
             self.storage
-                .track_view_operation(from_who.clone(), view.clone(), operation)
+                .add_peer_view_change_operation(from_who.clone(), view.clone(), operation)
                 .await;
         }
         let view = self.view.read().await;
-        let full_records = self.storage.full_records_received(view.clone()).await;
+        let full_records = self.storage.get_peers_with_full_records(view.clone()).await;
         // if we have f+1 full records we can start merge
         if full_records.len() >= f(view.members.len()).unwrap() + 1 {
             self.merge(full_records, view.clone()).await;
@@ -226,9 +227,163 @@ impl<
     async fn merge(&self, full_record_members: Vec<I>, view: View<I>) {
         for node in full_record_members {
             let ops_iter = self.storage.get_view_record_operations(node, view.clone());
-            for op in ops_iter {
-                let existing_main_record_op = self.storage.get_main_or_local_operation()
+            // This is the IR-MERGE-RECORDS(records) part of the paper
+            for op in ops_iter.next().await {
+                let existing_main_record_op = self
+                    .storage
+                    .get_main_or_local_operation(view.clone(), op.client(), op.sequence().clone())
+                    .await;
+                self.resolve_record_merge(view.clone(), op, existing_main_record_op)
+                    .await
             }
+            // now we resolve all undecided operations
+            let unresolved_iter = self
+                .storage
+                .get_unresolved_record_operations(view.clone())
+                .await;
+
+            while let Some(op) = unresolved_iter.next().await {
+                // TODO validate it hasn't already been finalised miraculously (or if storage engine has a bad implementation)
+                let quorum = find_quorum(op.iter().map(|op| QuorumVote {
+                    node: op.client(),
+                    message: op.message(),
+                    view: &view,
+                }));
+                let first_op = op.first().unwrap();
+                let quorum = quorum.expect("We should always have a quorum");
+                self.storage
+                    .record_main_operation(
+                        quorum.view.clone(),
+                        match first_op.consistent() {
+                            true => IROperation::ConsistentFinalize {
+                                client: first_op.client().clone(),
+                                sequence: first_op.sequence().clone(),
+                                message: quorum.message.clone(),
+                            },
+                            false => IROperation::InconsistentFinalize {
+                                client: first_op.client().clone(),
+                                sequence: first_op.sequence().clone(),
+                                message: quorum.message.clone(),
+                            },
+                        },
+                    )
+                    .await;
+            }
+        }
+        // Completed merge!
+        // TODO Now ship to all nodes, wait for f+1 confirmations and proceed to new view
+    }
+
+    async fn resolve_record_merge(
+        &self,
+        view: View<I>,
+        received: IROperation<I, M>,
+        ours: Option<IROperation<I, M>>,
+    ) {
+        match (received, ours) {
+            // All inconsistent messages are reduced to an inconsistent message
+            (
+                IROperation::InconsistentFinalize {
+                    client,
+                    sequence,
+                    message,
+                },
+                _,
+            )
+            | (
+                _,
+                IROperation::InconsistentFinalize {
+                    client,
+                    sequence,
+                    message,
+                },
+            ) => {
+                self.storage
+                    .record_main_operation(
+                        view.clone(),
+                        IROperation::InconsistentFinalize {
+                            client: client.clone(),
+                            sequence,
+                            message: message.clone(),
+                        },
+                    )
+                    .await;
+            }
+            // All consistent finalized messages are reduced to a single finalized message
+            (
+                IROperation::ConsistentFinalize {
+                    client,
+                    sequence,
+                    message,
+                },
+                _,
+            )
+            | (
+                _,
+                IROperation::ConsistentFinalize {
+                    client,
+                    sequence,
+                    message,
+                },
+            ) => {
+                self.storage
+                    .record_main_operation(
+                        view.clone(),
+                        IROperation::ConsistentFinalize {
+                            client: client.clone(),
+                            sequence,
+                            message: message.clone(),
+                        },
+                    )
+                    .await;
+            }
+            // All consistent tentative messages need to be added for tallying
+            (
+                IROperation::ConsistentPropose {
+                    client: client_left,
+                    sequence: sequence_left,
+                    message: message_left,
+                },
+                IROperation::ConsistentPropose {
+                    client: client_right,
+                    sequence: sequence_right,
+                    message: message_right,
+                },
+            ) => {
+                self.storage
+                    .record_main_operation_add_undecided(
+                        view.clone(),
+                        IROperation::ConsistentPropose {
+                            client: client_left,
+                            sequence: sequence_left,
+                            message: message_left,
+                        },
+                    )
+                    .await;
+                self.storage
+                    .record_main_operation_add_undecided(
+                        view.clone(),
+                        IROperation::ConsistentPropose {
+                            client: client_right,
+                            sequence: sequence_right,
+                            message: message_right,
+                        },
+                    )
+                    .await;
+            }
+            // All inconsistent tentative messages need to be added for tallying (this is not in the paper)
+            (
+                IROperation::InconsistentPropose {
+                    client: client_left,
+                    sequence: sequence_left,
+                    message: message_left,
+                },
+                IROperation::InconsistentPropose {
+                    client: client_right,
+                    sequence: sequence_right,
+                    message: message_right,
+                },
+            ) => {}
         }
     }
 
@@ -272,22 +427,51 @@ pub enum IROperation<ID: NodeID, MSG: IRMessage> {
     },
 }
 
-impl <ID: NodeID, MSG: IRMessage> IROperation<ID, MSG> {
+impl<ID: NodeID, MSG: IRMessage> IROperation<ID, MSG> {
     pub fn client(&self) -> &ID {
         match self {
-            IROperation::InconsistentPropose { client, ..} => client,
-            IROperation::InconsistentFinalize { client, ..} => client,
-            IROperation::ConsistentPropose { client,..} => client,
-            IROperation::ConsistentFinalize { client,..} => client
+            IROperation::InconsistentPropose { client, .. } => client,
+            IROperation::InconsistentFinalize { client, .. } => client,
+            IROperation::ConsistentPropose { client, .. } => client,
+            IROperation::ConsistentFinalize { client, .. } => client,
         }
     }
 
     pub fn sequence(&self) -> &OperationSequence {
         match self {
-            IROperation::InconsistentPropose { sequence,..} => sequence,
-            IROperation::InconsistentFinalize { sequence,..} => sequence,
-            IROperation::ConsistentPropose { sequence,..} => sequence,
-            IROperation::ConsistentFinalize { sequence,..} => sequence,
+            IROperation::InconsistentPropose { sequence, .. } => sequence,
+            IROperation::InconsistentFinalize { sequence, .. } => sequence,
+            IROperation::ConsistentPropose { sequence, .. } => sequence,
+            IROperation::ConsistentFinalize { sequence, .. } => sequence,
+        }
+    }
+
+    pub fn message(&self) -> &MSG {
+        match self {
+            IROperation::InconsistentPropose { message, .. } => message,
+            IROperation::InconsistentFinalize { message, .. } => message,
+            IROperation::ConsistentPropose { message, .. } => message,
+            IROperation::ConsistentFinalize { message, .. } => message,
+        }
+    }
+
+    pub fn consistent(&self) -> bool {
+        match self {
+            IROperation::InconsistentPropose { .. } | IROperation::InconsistentFinalize { .. } => {
+                false
+            }
+            IROperation::ConsistentPropose { .. } | IROperation::ConsistentFinalize { .. } => true,
+        }
+    }
+
+    pub fn finalized(&self) -> bool {
+        match self {
+            IROperation::InconsistentFinalize { .. } | IROperation::ConsistentFinalize { .. } => {
+                true
+            }
+            IROperation::InconsistentPropose { .. } | IROperation::ConsistentPropose { .. } => {
+                false
+            }
         }
     }
 }

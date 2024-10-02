@@ -111,7 +111,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;
 
     /// Add a received operation from a peer node view to that peers record before merging
-    fn track_view_operation(
+    fn add_peer_view_change_operation(
         &self,
         node_id: ID,
         view: View<ID>,
@@ -119,7 +119,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
     ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 
     /// Receive the peer node list whos full records have been received
-    fn full_records_received(
+    fn get_peers_with_full_records(
         &self,
         view: View<ID>,
     ) -> Pin<Box<dyn Future<Output = Vec<ID>> + 'static>>;
@@ -137,7 +137,28 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
         view: View<ID>,
         client: ID,
         operation_sequence: OperationSequence,
-    ) -> Option<IROperation<ID, MSG>>;
+    ) -> Pin<Box<dyn Future<Output = Option<IROperation<ID, MSG>>>>>;
+
+    /// Store a resolved record in the main record store, during merging
+    fn record_main_operation(
+        &self,
+        view: View<ID>,
+        operation: IROperation<ID, MSG>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+    /// Store a **NOT** resolved record in the main record store, during merging
+    /// Duplicate writes must be handled gracefully (noop)
+    fn record_main_operation_add_undecided(
+        &self,
+        view: View<ID>,
+        operation: IROperation<ID, MSG>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+    /// Iterate over unresolved operations
+    fn get_unresolved_record_operations(
+        &self,
+        view: View<ID>,
+    ) -> Pin<Box<dyn Future<Output = Box<dyn AsyncIterator<Item = Vec<IROperation<ID, MSG>>>>>>>;
 }
 
 /// Provides access to persistence for the client
