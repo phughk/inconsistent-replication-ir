@@ -110,6 +110,7 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
         message: MSG,
     ) -> Pin<Box<dyn Future<Output = MSG> + 'static>>;
 
+    /// Add a received operation from a peer node view to that peers record before merging
     fn track_view_operation(
         &self,
         node_id: ID,
@@ -117,16 +118,26 @@ pub trait IRStorage<ID: NodeID, MSG: IRMessage>: StorageShared<ID> + Clone + 'st
         operation: IROperation<ID, MSG>,
     ) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 
+    /// Receive the peer node list whos full records have been received
     fn full_records_received(
         &self,
         view: View<ID>,
     ) -> Pin<Box<dyn Future<Output = Vec<ID>> + 'static>>;
 
+    /// Retrieve the list of operations that have been finalised (i.e. fully sent)
     fn get_view_record_operations(
         &self,
         node: ID,
         view: View<ID>,
     ) -> impl AsyncIterator<Item = IROperation<ID, MSG>>;
+
+    /// Retrieve the main record or the local record
+    fn get_main_or_local_operation(
+        &self,
+        view: View<ID>,
+        client: ID,
+        operation_sequence: OperationSequence,
+    ) -> Option<IROperation<ID, MSG>>;
 }
 
 /// Provides access to persistence for the client

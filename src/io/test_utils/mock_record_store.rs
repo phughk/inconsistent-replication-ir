@@ -1,4 +1,4 @@
-use crate::server::View;
+use crate::server::{IROperation, View};
 use crate::types::{IRMessage, NodeID, OperationSequence};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -31,12 +31,8 @@ pub(crate) enum OperationType {
 }
 
 pub(crate) struct FullState<ID: NodeID, MSG: IRMessage> {
-    pub(crate) client: ID,
-    pub(crate) operation: OperationSequence,
+    pub(crate) ir_operation: IROperation<ID, MSG>,
     pub(crate) view: View<ID>,
-    pub(crate) state: State,
-    pub(crate) operation_type: OperationType,
-    pub(crate) message: MSG,
 }
 
 #[derive(Clone)]
@@ -62,13 +58,37 @@ impl<ID: NodeID, MSG: IRMessage> MockRecordStore<ID, MSG> {
             .await
             .iter()
             .filter(|(k, _v)| k.client == client && k.sequence == operation)
-            .map(|(k, v)| FullState {
-                client: k.client.clone(),
-                operation: k.sequence,
-                view: k.view.clone(),
-                state: v.state.clone(),
-                operation_type: v.operation_type.clone(),
-                message: v.operation.clone(),
+            .map(|(k, v)| {
+                let op = match v.operation_type {
+                    OperationType::Consistent => match v.state {
+                        State::Tentative => IROperation::ConsistentPropose {
+                            client: k.client.clone(),
+                            sequence: k.sequence,
+                            message: v.operation.clone(),
+                        },
+                        State::Finalized => IROperation::ConsistentFinalize {
+                            client: k.client.clone(),
+                            sequence: k.sequence,
+                            message: v.operation.clone(),
+                        },
+                    },
+                    OperationType::Inconsistent => match v.state {
+                        State::Tentative => IROperation::InconsistentPropose {
+                            client: k.client.clone(),
+                            sequence: k.sequence,
+                            message: v.operation.clone(),
+                        },
+                        State::Finalized => IROperation::InconsistentFinalize {
+                            client: k.client.clone(),
+                            sequence: k.sequence,
+                            message: v.operation.clone(),
+                        },
+                    },
+                };
+                FullState {
+                    ir_operation: op,
+                    view: k.view.clone(),
+                }
             })
             .collect();
         assert!(found.len() <= 1);

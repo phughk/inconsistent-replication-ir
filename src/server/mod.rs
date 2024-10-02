@@ -225,7 +225,10 @@ impl<
 
     async fn merge(&self, full_record_members: Vec<I>, view: View<I>) {
         for node in full_record_members {
-            self.storage.get_view_record_operations(node, view.clone());
+            let ops_iter = self.storage.get_view_record_operations(node, view.clone());
+            for op in ops_iter {
+                let existing_main_record_op = self.storage.get_main_or_local_operation()
+            }
         }
     }
 
@@ -267,4 +270,24 @@ pub enum IROperation<ID: NodeID, MSG: IRMessage> {
         sequence: OperationSequence,
         message: MSG,
     },
+}
+
+impl <ID: NodeID, MSG: IRMessage> IROperation<ID, MSG> {
+    pub fn client(&self) -> &ID {
+        match self {
+            IROperation::InconsistentPropose { client, ..} => client,
+            IROperation::InconsistentFinalize { client, ..} => client,
+            IROperation::ConsistentPropose { client,..} => client,
+            IROperation::ConsistentFinalize { client,..} => client
+        }
+    }
+
+    pub fn sequence(&self) -> &OperationSequence {
+        match self {
+            IROperation::InconsistentPropose { sequence,..} => sequence,
+            IROperation::InconsistentFinalize { sequence,..} => sequence,
+            IROperation::ConsistentPropose { sequence,..} => sequence,
+            IROperation::ConsistentFinalize { sequence,..} => sequence,
+        }
+    }
 }

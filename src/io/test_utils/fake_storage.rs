@@ -1,19 +1,25 @@
 use crate::debug::MaybeDebug;
 use crate::io::{IRClientStorage, StorageShared};
-use crate::server::{View, ViewState};
+use crate::server::{IROperation, View, ViewState};
 use crate::test_utils::mock_computers::MockOperationHandler;
 use crate::test_utils::mock_record_store::{MockRecordStore, OperationType, State};
-use crate::types::{IRMessage, NodeID};
+use crate::types::{AsyncIterator, IRMessage, NodeID, OperationSequence};
 use crate::IRStorage;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as TokioRwLock;
 
 #[derive(Clone)]
 pub struct FakeIRStorage<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> {
+    /// Stores the local record store
     records: MockRecordStore<ID, MSG>,
+    /// Stores received records from nodes during view change. Can be purged once a view change completes.
+    received_record_logs: Arc<RwLock<BTreeMap<(View<ID>, ID), MockRecordStore<ID, MSG>>>>,
+    /// Just a tracker for local view in case of restart
     current_view: Arc<TokioRwLock<View<ID>>>,
+    /// That thang that handles operation processing
     computer_lol: CPU,
 }
 
@@ -158,6 +164,78 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRStorage<ID, M
             computer.reconcile_consistent(previous, operation)
         })
     }
+
+    fn track_view_operation(
+        &self,
+        node_id: ID,
+        view: View<ID>,
+        operation: IROperation<ID, MSG>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
+        Box::pin(async move {
+            let mut wl = self.received_record_logs.write().unwrap();
+            let record_store = wl
+                .entry((view, node_id))
+                .or_insert_with(|| MockRecordStore::new());
+            let found = record_store
+                .find_entry(operation.client().clone(), operation.sequence().clone())
+                .await;
+            match (operation, found) {
+                // Inconsistent finalized resolves to consistent
+                (
+                    IROperation::InconsistentFinalize {
+                        client,
+                        sequence,
+                        message,
+                    },
+                    _,
+                ) => {}
+                (
+                    IROperation::InconsistentPropose {
+                        client,
+                        sequence,
+                        message,
+                    },
+                    None,
+                ) => {}
+                (_, Some(f)) => {}
+                // Consistent
+                (
+                    IROperation::ConsistentFinalize {
+                        client,
+                        sequence,
+                        message,
+                    },
+                    _,
+                ) => {}
+                // All other cases are panic
+                (_, _) => {}
+            }
+        })
+    }
+
+    fn full_records_received(
+        &self,
+        view: View<ID>,
+    ) -> Pin<Box<dyn Future<Output = Vec<ID>> + 'static>> {
+        todo!()
+    }
+
+    fn get_view_record_operations(
+        &self,
+        node: ID,
+        view: View<ID>,
+    ) -> impl AsyncIterator<Item = IROperation<ID, MSG>> {
+        todo!()
+    }
+
+    fn get_main_or_local_operation(
+        &self,
+        view: View<ID>,
+        client: ID,
+        operation_sequence: OperationSequence,
+    ) -> Option<IROperation<ID, MSG>> {
+        todo!()
+    }
 }
 
 impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> IRClientStorage<ID, MSG>
@@ -169,6 +247,7 @@ impl<ID: NodeID, MSG: IRMessage, CPU: MockOperationHandler<MSG>> FakeIRStorage<I
     pub fn new(members: Vec<ID>, computer: CPU) -> Self {
         FakeIRStorage {
             records: MockRecordStore::new(),
+            received_record_logs: Arc::new(RwLock::new(BTreeMap::new())),
             current_view: Arc::new(TokioRwLock::new(View {
                 view: 0,
                 members,
