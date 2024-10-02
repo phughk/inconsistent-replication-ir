@@ -268,6 +268,16 @@ impl<ID: NodeID, MSG: IRMessage, STO: IRStorage<ID, MSG>> FakeIRNetwork<ID, MSG,
         write_lock.insert(node_id, val.switch().await);
     }
 
+    /// Perform all the maintenance tasks of all associated nodes
+    pub async fn do_all_maintenance(&self) {
+        let node_lock = self.nodes.read().await;
+        for node in node_lock.values() {
+            if let SwitchableNode::On(node) = node {
+                node.perform_maintenance().await;
+            }
+        }
+    }
+
     /// True, if the packet should be dropped
     fn should_drop(counter: DropPacketCounter<ID>, id: &ID) -> bool {
         let locked = counter.read().unwrap();

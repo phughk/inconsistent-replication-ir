@@ -164,5 +164,6 @@ fuzz_target!(|data: TestScenario| {
                 smol::block_on(network.switch(node_id))
             }
         }
+        smol::block_on(network.do_all_maintenance())
     }
 });
